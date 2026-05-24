@@ -1,0 +1,86 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "boulevard-boosting"
+version = "0.0.1"
+description = "Boulevard-style wrappers for boosted tree models with uncertainty intervals."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [
+    { name = "Yichen Zhou, Kevin Tan, Giles Hooker, Haimo Fang" }
+]
+keywords = [
+    "boosting",
+    "gradient boosting",
+    "uncertainty quantification",
+    "conformal prediction",
+    "xgboost",
+    "machine learning"
+]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+dependencies = [
+    "numpy>=1.22",
+    "scikit-learn>=1.2",
+]
+
+[project.optional-dependencies]
+xgboost = [
+    "xgboost>=2.0",
+]
+
+lightgbm = [
+    "lightgbm>=4.0",
+]
+
+catboost = [
+    "catboost>=1.2",
+]
+
+interpretml = [
+    "interpret>=0.6",
+]
+
+dev = [
+    "pytest>=7.0",
+    "ruff>=0.4",
+    "black>=24.0",
+]
+
+all = [
+    "xgboost>=2.0",
+    "lightgbm>=4.0",
+    "catboost>=1.2",
+    "interpret>=0.6",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.black]
+line-length = 88
+target-version = ["py39"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = []
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
