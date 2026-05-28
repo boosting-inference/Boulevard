@@ -1,18 +1,156 @@
-"""Native BRAT estimator placeholders.
-
-BRAT-D and BRAT-P will be ported here from the scratch ``BRATs`` package.
-They require true custom residual construction, so they belong in native
-Boulevard estimators instead of backend wrappers around existing libraries.
-"""
+"""Native BRAT estimators."""
 
 from __future__ import annotations
 
+from typing import Any
 
-class BRATDRegressor:
-    """Reserved estimator for Boulevard Regularized Additive Trees with dropout."""
+import numpy as np
+from sklearn.base import BaseEstimator, RegressorMixin
+from sklearn.utils.validation import check_array, check_is_fitted, check_X_y
 
-    def __init__(self, *args, **kwargs) -> None:
-        raise NotImplementedError("BRATDRegressor has not been ported yet.")
+from boulevard.algorithms.brat_d import brat_d_scale
+from boulevard.backends.sklearn_tree import SubsampledDecisionTreeRegressor
+from boulevard.estimators._base import ConformalIntervalMixin
+from boulevard.intervals.conformal import SplitConformalInterval
+
+
+class BRATDRegressor(ConformalIntervalMixin, RegressorMixin, BaseEstimator):
+    """Boulevard Regularized Additive Regression Trees with dropout.
+
+    This is a scikit-learn-compatible port of the scratch BRAT-D algorithm.
+    It uses sklearn decision trees as the native tree backend and stores the
+    in-bag and leaf metadata needed for future asymptotic interval methods.
+    """
+
+    def __init__(
+        self,
+        n_estimators: int = 100,
+        *,
+        learning_rate: float = 1.0,
+        max_depth: int | None = 4,
+        min_samples_split: int = 2,
+        subsample_rate: float = 0.8,
+        dropout_rate: float = 0.5,
+        random_state: int | None = None,
+        verbose: int = 0,
+    ) -> None:
+        self.n_estimators = n_estimators
+        self.learning_rate = learning_rate
+        self.max_depth = max_depth
+        self.min_samples_split = min_samples_split
+        self.subsample_rate = subsample_rate
+        self.dropout_rate = dropout_rate
+        self.random_state = random_state
+        self.verbose = verbose
+
+    def fit(
+        self,
+        X: Any,
+        y: Any,
+        sample_weight: np.ndarray | None = None,
+    ) -> "BRATDRegressor":
+        """Fit the BRAT-D ensemble."""
+        X, y = check_X_y(X, y, accept_sparse=False, y_numeric=True)
+        self._validate_params()
+
+        rng = np.random.default_rng(self.random_state)
+        n_samples = X.shape[0]
+        self.n_features_in_ = X.shape[1]
+        self.estimators_: list[SubsampledDecisionTreeRegressor] = []
+        self.in_bag_matrix_ = np.zeros((n_samples, self.n_estimators), dtype=bool)
+        self.leaf_assignments_ = np.zeros((n_samples, self.n_estimators), dtype=int)
+        self.train_score_: list[float] = []
+        self.conformal_interval_: SplitConformalInterval | None = None
+
+        for tree_idx in range(self.n_estimators):
+            residuals = self._residuals_for_next_tree(X, y, rng)
+            tree_seed = int(rng.integers(0, np.iinfo(np.int32).max))
+            tree = SubsampledDecisionTreeRegressor(
+                subsample_rate=self.subsample_rate,
+                max_depth=self.max_depth,
+                min_samples_split=self.min_samples_split,
+                random_state=tree_seed,
+            )
+            tree.fit(X, residuals, sample_weight=sample_weight)
+
+            self.estimators_.append(tree)
+            self.in_bag_matrix_[:, tree_idx] = tree.in_bag_
+            self.leaf_assignments_[:, tree_idx] = tree.leaf_assignments_
+
+            if self.verbose:
+                mse = float(np.mean((y - self.predict(X)) ** 2))
+                self.train_score_.append(mse)
+
+        if not self.verbose:
+            self.train_score_ = []
+
+        return self
+
+    def predict(self, X: Any) -> np.ndarray:
+        """Predict regression targets."""
+        check_is_fitted(self, "estimators_")
+        X = check_array(X, accept_sparse=False)
+
+        if not self.estimators_:
+            return np.zeros(X.shape[0], dtype=float)
+
+        pred = np.zeros(X.shape[0], dtype=float)
+        for tree in self.estimators_:
+            pred += self.learning_rate * tree.predict(X)
+
+        pred /= len(self.estimators_)
+        pred *= brat_d_scale(self.learning_rate, self.dropout_rate)
+        return pred
+
+    def apply_leaf_indices(self, X: Any) -> np.ndarray:
+        """Return leaf indices for each sample and tree."""
+        check_is_fitted(self, "estimators_")
+        X = check_array(X, accept_sparse=False)
+        return np.column_stack([tree.leaf_indices(X) for tree in self.estimators_])
+
+    def in_bag_matrix(self) -> np.ndarray:
+        """Return the training in-bag matrix."""
+        check_is_fitted(self, "in_bag_matrix_")
+        return self.in_bag_matrix_
+
+    def get_backend_model(self) -> list[SubsampledDecisionTreeRegressor]:
+        """Return the fitted native tree ensemble."""
+        check_is_fitted(self, "estimators_")
+        return self.estimators_
+
+    def _residuals_for_next_tree(
+        self,
+        X: np.ndarray,
+        y: np.ndarray,
+        rng: np.random.Generator,
+    ) -> np.ndarray:
+        if not self.estimators_:
+            return y
+
+        q = 1 - self.dropout_rate
+        keep_count = int(np.round(q * len(self.estimators_)))
+        if keep_count == 0:
+            return y
+
+        selected = rng.choice(len(self.estimators_), size=keep_count, replace=False)
+        pred = np.zeros(X.shape[0], dtype=float)
+        for idx in selected:
+            pred += self.estimators_[int(idx)].predict(X)
+
+        pred *= self.learning_rate / len(self.estimators_)
+        return y - pred
+
+    def _validate_params(self) -> None:
+        if self.n_estimators < 1:
+            raise ValueError("n_estimators must be at least 1.")
+        if self.learning_rate <= 0:
+            raise ValueError("learning_rate must be positive.")
+        if not 0 < self.subsample_rate <= 1:
+            raise ValueError("subsample_rate must be in (0, 1].")
+        if not 0 <= self.dropout_rate <= 1:
+            raise ValueError("dropout_rate must be between 0 and 1.")
+        if self.min_samples_split < 2:
+            raise ValueError("min_samples_split must be at least 2.")
 
 
 class BRATPRegressor:

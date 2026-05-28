@@ -5,9 +5,11 @@ from boulevard.backends._protocol import (
     SupportsPerTreePrediction,
     TreeEnsembleBackend,
 )
+from boulevard.backends.sklearn_tree import SubsampledDecisionTreeRegressor
 
 __all__ = [
     "SupportsInBagMatrix",
     "SupportsPerTreePrediction",
+    "SubsampledDecisionTreeRegressor",
     "TreeEnsembleBackend",
 ]
