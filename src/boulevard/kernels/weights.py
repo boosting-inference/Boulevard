@@ -17,4 +17,9 @@ def solve_brat_d_weights(
         raise ValueError("learning_rate must be positive.")
     q = 1 - dropout_rate
     matrix = (1 / learning_rate) * np.eye(kernel_matrix.shape[0]) + q * kernel_matrix
-    return np.linalg.solve(matrix.T, np.asarray(kernel_vector, dtype=float))
+    kernel_vector = np.asarray(kernel_vector, dtype=float)
+    if kernel_vector.ndim == 1:
+        return np.linalg.solve(matrix.T, kernel_vector)
+    if kernel_vector.ndim == 2:
+        return np.linalg.solve(matrix.T, kernel_vector.T).T
+    raise ValueError("kernel_vector must be one- or two-dimensional.")

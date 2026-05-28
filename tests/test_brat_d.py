@@ -109,10 +109,76 @@ def test_brat_d_conformal_interval():
     model.fit(X_train, y_train)
     model.calibrate(X_calib, y_calib, alpha=0.1)
 
-    lower, upper = model.predict_interval(X_calib[:10])
+    lower, upper = model.predict_interval(X_calib[:10], method="conformal")
 
     assert lower.shape == upper.shape == (10,)
     assert np.all(lower <= upper)
+
+
+def test_brat_d_asymptotic_intervals():
+    X, y = make_regression(
+        n_samples=140,
+        n_features=4,
+        noise=2.0,
+        random_state=0,
+    )
+    X_train, X_calib, y_train, y_calib = train_test_split(
+        X,
+        y,
+        test_size=0.3,
+        random_state=0,
+    )
+
+    model = bd.BRATDRegressor(
+        n_estimators=12,
+        learning_rate=0.6,
+        max_depth=3,
+        subsample_rate=0.8,
+        dropout_rate=0.4,
+        random_state=0,
+    )
+    model.fit(X_train, y_train)
+    model.prepare_inference(X_calib, y_calib)
+
+    assert model.kernel_matrix_.shape == (X_train.shape[0], X_train.shape[0])
+    assert model.sigma_hat2_ >= 0
+
+    ci_lower, ci_upper = model.confidence_interval(X_calib[:8])
+    pi_lower, pi_upper = model.prediction_interval(X_calib[:8])
+    raw_pi_lower, raw_pi_upper = model.prediction_interval(
+        X_calib[:8],
+        calibrated=False,
+    )
+    ri_lower, ri_upper = model.reproduction_interval(X_calib[:8])
+    pi2_lower, pi2_upper = model.predict_interval(X_calib[:8], method="asymptotic")
+
+    for lower, upper in [
+        (ci_lower, ci_upper),
+        (pi_lower, pi_upper),
+        (raw_pi_lower, raw_pi_upper),
+        (ri_lower, ri_upper),
+        (pi2_lower, pi2_upper),
+    ]:
+        assert lower.shape == upper.shape == (8,)
+        assert np.all(np.isfinite(lower))
+        assert np.all(np.isfinite(upper))
+        assert np.all(lower <= upper)
+
+
+def test_brat_d_asymptotic_intervals_require_prepare_inference():
+    X, y = make_regression(
+        n_samples=80,
+        n_features=3,
+        noise=1.0,
+        random_state=0,
+    )
+    model = bd.BRATDRegressor(
+        n_estimators=5,
+        random_state=0,
+    ).fit(X, y)
+
+    with pytest.raises(RuntimeError, match="prepare_inference"):
+        model.confidence_interval(X[:3])
 
 
 def test_brat_d_visual_prediction_curve(tmp_path):
@@ -145,7 +211,7 @@ def test_brat_d_visual_prediction_curve(tmp_path):
     model.calibrate(X_calib, y_calib, alpha=0.1)
 
     pred = model.predict(X)
-    lower, upper = model.predict_interval(X)
+    lower, upper = model.predict_interval(X, method="conformal")
 
     fig, ax = plt.subplots(figsize=(8, 4.5))
     ax.scatter(X_train[:, 0], y_train, s=12, alpha=0.35, label="train")

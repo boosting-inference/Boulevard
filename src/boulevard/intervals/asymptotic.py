@@ -24,10 +24,17 @@ def normal_interval(
     """Return normal-approximation interval bounds."""
     if not 0 < alpha < 1:
         raise ValueError("alpha must be between 0 and 1.")
-    z = NormalDist().inv_cdf(1 - alpha / 2)
+    z = normal_quantile(alpha)
     center = np.asarray(center, dtype=float)
     standard_error = np.asarray(standard_error, dtype=float)
     return NormalInterval(
         lower=center - z * standard_error,
         upper=center + z * standard_error,
     )
+
+
+def normal_quantile(alpha: float) -> float:
+    """Return the two-sided normal quantile for significance level ``alpha``."""
+    if not 0 < alpha < 1:
+        raise ValueError("alpha must be between 0 and 1.")
+    return NormalDist().inv_cdf(1 - alpha / 2)

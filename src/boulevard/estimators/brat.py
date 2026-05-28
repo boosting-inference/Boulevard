@@ -11,7 +11,10 @@ from sklearn.utils.validation import check_array, check_is_fitted, check_X_y
 from boulevard.algorithms.brat_d import brat_d_scale
 from boulevard.backends.sklearn_tree import SubsampledDecisionTreeRegressor
 from boulevard.estimators._base import ConformalIntervalMixin
+from boulevard.intervals.asymptotic import normal_interval, normal_quantile
 from boulevard.intervals.conformal import SplitConformalInterval
+from boulevard.kernels.leaf import leaf_kernel_matrix, leaf_kernel_vector
+from boulevard.kernels.weights import solve_brat_d_weights
 
 
 class BRATDRegressor(ConformalIntervalMixin, RegressorMixin, BaseEstimator):
@@ -56,6 +59,8 @@ class BRATDRegressor(ConformalIntervalMixin, RegressorMixin, BaseEstimator):
         rng = np.random.default_rng(self.random_state)
         n_samples = X.shape[0]
         self.n_features_in_ = X.shape[1]
+        self.X_train_ = X.copy()
+        self.y_train_ = y.copy()
         self.estimators_: list[SubsampledDecisionTreeRegressor] = []
         self.in_bag_matrix_ = np.zeros((n_samples, self.n_estimators), dtype=bool)
         self.leaf_assignments_ = np.zeros((n_samples, self.n_estimators), dtype=int)
@@ -113,6 +118,109 @@ class BRATDRegressor(ConformalIntervalMixin, RegressorMixin, BaseEstimator):
         check_is_fitted(self, "in_bag_matrix_")
         return self.in_bag_matrix_
 
+    def prepare_inference(
+        self,
+        X_calib: Any | None = None,
+        y_calib: Any | None = None,
+    ) -> "BRATDRegressor":
+        """Prepare exact BRAT-D asymptotic interval inference.
+
+        This computes the empirical tree kernel from training leaf assignments
+        and estimates the noise variance from calibration residuals. If no
+        calibration data is provided, the training residuals are used.
+        """
+        check_is_fitted(self, "estimators_")
+
+        if (X_calib is None) != (y_calib is None):
+            raise ValueError("X_calib and y_calib must be provided together.")
+
+        if X_calib is None:
+            X_var = self.X_train_
+            y_var = self.y_train_
+        else:
+            X_var = check_array(X_calib, accept_sparse=False)
+            y_var = np.asarray(y_calib, dtype=float)
+            if X_var.shape[0] != y_var.shape[0]:
+                raise ValueError("X_calib and y_calib must contain the same number of rows.")
+
+        residuals = y_var - self.predict(X_var)
+        if residuals.shape[0] < 2:
+            raise ValueError("At least two residuals are required to estimate variance.")
+
+        self.X_inference_calib_ = X_var.copy()
+        self.y_inference_calib_ = y_var.copy()
+        self.sigma_hat2_ = float(np.var(residuals, ddof=1))
+        self.kernel_matrix_ = leaf_kernel_matrix(
+            self.leaf_assignments_,
+            self.in_bag_matrix_,
+        )
+        self.inference_method_ = "exact"
+        return self
+
+    def predict_interval(
+        self,
+        X: Any,
+        alpha: float | None = None,
+        method: str = "asymptotic",
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Return prediction intervals.
+
+        ``method='asymptotic'`` uses the raw BRAT-D CLT interval after
+        ``prepare_inference`` has been called. ``method='conformal'`` uses split
+        conformal calibration.
+        """
+        if method == "conformal":
+            return super().predict_interval(X, alpha=alpha, method=method)
+        if method == "asymptotic":
+            return self.prediction_interval(
+                X,
+                alpha=0.05 if alpha is None else alpha,
+            )
+        raise ValueError("method must be 'conformal' or 'asymptotic'.")
+
+    def confidence_interval(
+        self,
+        X: Any,
+        alpha: float = 0.05,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Return asymptotic BRAT-D confidence intervals for ``f(x)``."""
+        center = self.predict(X)
+        r_norm = self._weight_norms(X)
+        scale = brat_d_scale(self.learning_rate, self.dropout_rate)
+        se = scale * np.sqrt(self.sigma_hat2_) * r_norm
+        interval = normal_interval(center, se, alpha=alpha)
+        return interval.lower, interval.upper
+
+    def prediction_interval(
+        self,
+        X: Any,
+        alpha: float = 0.05,
+        calibrated: bool = False,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Return asymptotic BRAT-D prediction intervals for ``y | x``."""
+        center = self.predict(X)
+        half_width = self._prediction_half_width(X, alpha=alpha)
+        if calibrated:
+            half_width *= self._prediction_calibration_scale(alpha=alpha)
+        return center - half_width, center + half_width
+
+    def reproduction_interval(
+        self,
+        X: Any,
+        alpha: float = 0.05,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Return asymptotic BRAT-D reproduction intervals."""
+        center = self.predict(X)
+        r_norm = self._weight_norms(X)
+        scale = brat_d_scale(self.learning_rate, self.dropout_rate)
+        se = np.sqrt(2) * scale * np.sqrt(self.sigma_hat2_) * r_norm
+        interval = normal_interval(center, se, alpha=alpha)
+        return interval.lower, interval.upper
+
+    def weight_norms(self, X: Any) -> np.ndarray:
+        """Return BRAT-D kernel weight norms used by asymptotic intervals."""
+        return self._weight_norms(X)
+
     def get_backend_model(self) -> list[SubsampledDecisionTreeRegressor]:
         """Return the fitted native tree ensemble."""
         check_is_fitted(self, "estimators_")
@@ -151,6 +259,48 @@ class BRATDRegressor(ConformalIntervalMixin, RegressorMixin, BaseEstimator):
             raise ValueError("dropout_rate must be between 0 and 1.")
         if self.min_samples_split < 2:
             raise ValueError("min_samples_split must be at least 2.")
+
+    def _weight_norms(self, X: Any) -> np.ndarray:
+        self._check_inference_prepared()
+        X = check_array(X, accept_sparse=False)
+        test_leaf_indices = self.apply_leaf_indices(X)
+        kernel_vectors = leaf_kernel_vector(
+            self.leaf_assignments_,
+            test_leaf_indices,
+            self.in_bag_matrix_,
+        )
+        weights = solve_brat_d_weights(
+            kernel_vectors,
+            self.kernel_matrix_,
+            learning_rate=self.learning_rate,
+            dropout_rate=self.dropout_rate,
+        )
+        return np.linalg.norm(weights, axis=1)
+
+    def _prediction_half_width(self, X: Any, alpha: float) -> np.ndarray:
+        r_norm = self._weight_norms(X)
+        scale = brat_d_scale(self.learning_rate, self.dropout_rate)
+        se = scale * np.sqrt(self.sigma_hat2_) * np.sqrt(1 + r_norm**2)
+        return normal_quantile(alpha) * se
+
+    def _prediction_calibration_scale(self, alpha: float) -> float:
+        self._check_inference_prepared()
+        center = self.predict(self.X_inference_calib_)
+        half_width = self._prediction_half_width(self.X_inference_calib_, alpha=alpha)
+        half_width = np.maximum(half_width, np.finfo(float).eps)
+        ratios = np.abs(self.y_inference_calib_ - center) / half_width
+        n_calib = ratios.shape[0]
+        quantile_level = np.ceil((n_calib + 1) * (1 - alpha)) / n_calib
+        quantile_level = min(quantile_level, 1.0)
+        return float(np.quantile(ratios, quantile_level, method="higher"))
+
+    def _check_inference_prepared(self) -> None:
+        check_is_fitted(self, "estimators_")
+        if not hasattr(self, "kernel_matrix_") or not hasattr(self, "sigma_hat2_"):
+            raise RuntimeError(
+                "BRAT-D asymptotic intervals require prepare_inference(...) "
+                "before calling interval methods."
+            )
 
 
 class BRATPRegressor:
