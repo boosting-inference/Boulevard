@@ -1,10 +1,10 @@
-"""CatBoost backend adapter placeholder."""
+"""CatBoost estimator wrapper placeholder."""
 
 from __future__ import annotations
 
 
-class CatBoostBackend:
-    """Reserved adapter for future CatBoost support."""
+class CatBoostRegressor:
+    """Reserved public wrapper for future CatBoost support."""
 
     def __init__(self, *args, **kwargs) -> None:
         raise NotImplementedError("CatBoost support has not been implemented yet.")
