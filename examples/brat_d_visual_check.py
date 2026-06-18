@@ -1,4 +1,4 @@
-"""Visual smoke check for BRAT-D predictions and intervals."""
+"""Visual smoke check and variance diagnostic for BRAT-D intervals."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ def main() -> None:
 
     rng = np.random.default_rng(0)
     noise_std = 0.15
-    X = np.linspace(0, 1, 240).reshape(-1, 1)
+    X = np.linspace(0, 1, 1000).reshape(-1, 1)
     truth = np.sin(2 * np.pi * X[:, 0]) + 0.5 * X[:, 0] ** 2
     y = truth + rng.normal(scale=noise_std, size=X.shape[0])
 
@@ -35,18 +35,27 @@ def main() -> None:
 
     def make_model(random_state: int) -> bd.BRATDRegressor:
         return bd.BRATDRegressor(
-            n_estimators=240,
-            learning_rate=0.8,
-            max_depth=6,
+            n_estimators=500,
+            learning_rate=0.3,
+            max_depth=8,
             min_samples_split=2,
-            subsample_rate=0.9,
-            dropout_rate=0.2,
+            subsample_rate=0.6,
+            dropout_rate=0.8,
             random_state=random_state,
         )
 
     model = make_model(random_state=0)
     model.fit(X_train, y_train)
     model.prepare_inference(X_calib, y_calib)
+
+    train_residuals = y_train - model.predict(X_train)
+    calib_residuals = y_calib - model.predict(X_calib)
+    calib_noise = y_calib - truth[calib_idx]
+    true_noise_var = noise_std**2
+    oracle_calib_noise_var = float(np.var(calib_noise, ddof=1))
+    train_centered_resid_var = float(np.var(train_residuals, ddof=1))
+    calib_centered_resid_var = float(np.var(calib_residuals, ddof=1))
+    calib_uncentered_resid_mse = float(np.mean(calib_residuals**2))
 
     pred = model.predict(X)
     confidence_lower, confidence_upper = model.confidence_interval(X, alpha=0.1)
@@ -58,6 +67,12 @@ def main() -> None:
     )
     reproduction_lower, reproduction_upper = model.reproduction_interval(X, alpha=0.1)
     r_norm = model.weight_norms(X)
+    confidence_half_width = np.maximum(
+        (confidence_upper - confidence_lower) / 2,
+        np.finfo(float).eps,
+    )
+    ci_error_ratio = np.abs(pred - truth) / confidence_half_width
+    ci_miss_mask = ci_error_ratio > 1
 
     n_future_responses = 200
     future_y = truth[None, :] + rng.normal(
@@ -89,8 +104,8 @@ def main() -> None:
 
     import matplotlib.pyplot as plt
 
-    fig = plt.figure(figsize=(12, 9))
-    grid = fig.add_gridspec(3, 2, height_ratios=[1, 1, 0.75])
+    fig = plt.figure(figsize=(12, 11))
+    grid = fig.add_gridspec(4, 2, height_ratios=[1, 1, 0.75, 0.65])
     axes = [
         fig.add_subplot(grid[0, 0]),
         fig.add_subplot(grid[0, 1]),
@@ -140,6 +155,31 @@ def main() -> None:
         extra_lines=reproduction_predictions[:8],
     )
 
+    variance_ax = fig.add_subplot(grid[1, 1])
+    variance_labels = [
+        "true\nnoise",
+        "oracle\ncalib",
+        "calib\ncentered",
+        "calib\nMSE",
+        "train\ncentered",
+    ]
+    variance_values = [
+        true_noise_var,
+        oracle_calib_noise_var,
+        calib_centered_resid_var,
+        calib_uncentered_resid_mse,
+        train_centered_resid_var,
+    ]
+    variance_ax.bar(
+        np.arange(len(variance_values)),
+        variance_values,
+        color=["#4c78a8", "#72b7b2", "#59a14f", "#f28e2b", "#bab0ac"],
+    )
+    variance_ax.axhline(true_noise_var, color="black", linewidth=1, linestyle="--")
+    variance_ax.set_title("Residual variance diagnostic")
+    variance_ax.set_xticks(np.arange(len(variance_labels)), variance_labels)
+    variance_ax.set_ylabel("variance")
+
     width_ax = fig.add_subplot(grid[2, 0])
     width_ax.plot(
         X[:, 0],
@@ -178,8 +218,44 @@ def main() -> None:
     weight_ax.set_ylabel("norm")
     weight_ax.legend(loc="best", fontsize=8)
 
+    ratio_ax = fig.add_subplot(grid[3, :])
+    ratio_ax.plot(
+        X[:, 0],
+        ci_error_ratio,
+        color="#6b4c9a",
+        label="|prediction - truth| / CI half-width",
+    )
+    ratio_ax.scatter(
+        X[ci_miss_mask, 0],
+        ci_error_ratio[ci_miss_mask],
+        color="#d62728",
+        s=12,
+        label="CI misses truth",
+        zorder=3,
+    )
+    ratio_ax.axhline(1.0, color="black", linewidth=1, linestyle="--")
+    ratio_ax.set_title("Confidence interval miss diagnostic")
+    ratio_ax.set_xlabel("x")
+    ratio_ax.set_ylabel("error / half-width")
+    ratio_ax.legend(loc="best", fontsize=8)
+
     print(f"sigma_hat2: {model.sigma_hat2_:.6f}")
+    print(f"true noise variance: {true_noise_var:.6f}")
+    print(f"oracle calibration noise variance: {oracle_calib_noise_var:.6f}")
+    print(f"calibration residual mean: {np.mean(calib_residuals):.6f}")
+    print(f"calibration centered residual variance: {calib_centered_resid_var:.6f}")
+    print(f"calibration uncentered residual MSE: {calib_uncentered_resid_mse:.6f}")
+    print(f"training centered residual variance: {train_centered_resid_var:.6f}")
+    print(
+        "sigma_hat2 equals calibration centered residual variance: "
+        f"{np.allclose(model.sigma_hat2_, calib_centered_resid_var)}"
+    )
     print(f"r_norm range: [{r_norm.min():.6f}, {r_norm.max():.6f}]")
+    print(
+        "CI error/half-width ratio range: "
+        f"[{ci_error_ratio.min():.6f}, {ci_error_ratio.max():.6f}]"
+    )
+    print(f"CI miss grid points: {ci_miss_mask.sum()} / {ci_miss_mask.size}")
     print(f"CI coverage vs truth E[y|x]: {ci_coverage:.3f}")
     print(f"raw asymptotic PI coverage vs fresh noisy y: {raw_pi_coverage:.3f}")
     print(
