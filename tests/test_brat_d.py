@@ -1,4 +1,5 @@
 import os
+from statistics import NormalDist
 
 import numpy as np
 import pytest
@@ -58,6 +59,45 @@ def test_brat_d_random_state_is_deterministic():
     second = bd.BRATDRegressor(**params).fit(X, y).predict(X)
 
     np.testing.assert_allclose(first, second)
+
+
+def test_brat_d_residual_dropout_uses_independent_bernoulli_sampling():
+    class ConstantTree:
+        def __init__(self, value):
+            self.value = value
+
+        def predict(self, X):
+            return np.full(X.shape[0], self.value, dtype=float)
+
+    X = np.zeros((3, 1))
+    y = np.full(3, 1000.0)
+    model = bd.BRATDRegressor(learning_rate=2.0, dropout_rate=0.5)
+    model.estimators_ = [
+        ConstantTree(1.0),
+        ConstantTree(10.0),
+        ConstantTree(100.0),
+        ConstantTree(1000.0),
+    ]
+
+    residuals = model._residuals_for_next_tree(X, y, np.random.default_rng(0))
+
+    # Seed 0 draws [0.637, 0.270, 0.041, 0.017], so Bernoulli(q=0.5)
+    # keeps the last three trees. The residual denominator is all previous trees.
+    expected = y - (2.0 / 4.0) * (10.0 + 100.0 + 1000.0)
+    np.testing.assert_allclose(residuals, np.full(3, expected))
+
+
+def test_brat_d_rejects_full_dropout_random_forest_limit():
+    X, y = make_regression(
+        n_samples=40,
+        n_features=2,
+        noise=1.0,
+        random_state=0,
+    )
+    model = bd.BRATDRegressor(dropout_rate=1.0)
+
+    with pytest.raises(ValueError, match="random-forest limit"):
+        model.fit(X, y)
 
 
 def test_brat_d_sklearn_clone_and_cross_val_score():
@@ -163,6 +203,33 @@ def test_brat_d_asymptotic_intervals():
         assert np.all(np.isfinite(lower))
         assert np.all(np.isfinite(upper))
         assert np.all(lower <= upper)
+
+
+def test_brat_d_asymptotic_intervals_use_signal_corrected_prediction_scale():
+    X = np.zeros((2, 1))
+    model = bd.BRATDRegressor(learning_rate=2.0, dropout_rate=0.25)
+    model.sigma_hat2_ = 9.0
+    model.predict = lambda X: np.full(X.shape[0], 10.0)
+    model._weight_norms = lambda X: np.full(X.shape[0], 4.0)
+
+    alpha = 0.2
+    z = NormalDist().inv_cdf(1 - alpha / 2)
+    prediction_scale = (1 + 2.0 * (1 - 0.25)) / 2.0
+
+    ci_lower, ci_upper = model.confidence_interval(X, alpha=alpha)
+    ci_half_width = z * prediction_scale * 3.0 * 4.0
+    np.testing.assert_allclose(ci_lower, np.full(2, 10.0 - ci_half_width))
+    np.testing.assert_allclose(ci_upper, np.full(2, 10.0 + ci_half_width))
+
+    pi_lower, pi_upper = model.prediction_interval(X, alpha=alpha)
+    pi_half_width = z * np.sqrt(9.0 * (1 + (prediction_scale * 4.0) ** 2))
+    np.testing.assert_allclose(pi_lower, np.full(2, 10.0 - pi_half_width))
+    np.testing.assert_allclose(pi_upper, np.full(2, 10.0 + pi_half_width))
+
+    ri_lower, ri_upper = model.reproduction_interval(X, alpha=alpha)
+    ri_half_width = z * np.sqrt(2) * prediction_scale * 3.0 * 4.0
+    np.testing.assert_allclose(ri_lower, np.full(2, 10.0 - ri_half_width))
+    np.testing.assert_allclose(ri_upper, np.full(2, 10.0 + ri_half_width))
 
 
 def test_brat_d_asymptotic_intervals_require_prepare_inference():

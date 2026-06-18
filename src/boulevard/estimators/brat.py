@@ -8,7 +8,6 @@ import numpy as np
 from sklearn.base import BaseEstimator, RegressorMixin
 from sklearn.utils.validation import check_array, check_is_fitted, check_X_y
 
-from boulevard.algorithms.brat_d import brat_d_scale
 from boulevard.backends.sklearn_tree import SubsampledDecisionTreeRegressor
 from boulevard.estimators._base import ConformalIntervalMixin
 from boulevard.intervals.asymptotic import normal_interval, normal_quantile
@@ -104,7 +103,8 @@ class BRATDRegressor(ConformalIntervalMixin, RegressorMixin, BaseEstimator):
             pred += self.learning_rate * tree.predict(X)
 
         pred /= len(self.estimators_)
-        pred *= brat_d_scale(self.learning_rate, self.dropout_rate)
+        q = 1 - self.dropout_rate
+        pred *= (1 + self.learning_rate * q) / self.learning_rate
         return pred
 
     def apply_leaf_indices(self, X: Any) -> np.ndarray:
@@ -186,7 +186,8 @@ class BRATDRegressor(ConformalIntervalMixin, RegressorMixin, BaseEstimator):
         """Return asymptotic BRAT-D confidence intervals for ``f(x)``."""
         center = self.predict(X)
         r_norm = self._weight_norms(X)
-        scale = brat_d_scale(self.learning_rate, self.dropout_rate)
+        q = 1 - self.dropout_rate
+        scale = (1 + self.learning_rate * q) / self.learning_rate
         se = scale * np.sqrt(self.sigma_hat2_) * r_norm
         interval = normal_interval(center, se, alpha=alpha)
         return interval.lower, interval.upper
@@ -212,7 +213,8 @@ class BRATDRegressor(ConformalIntervalMixin, RegressorMixin, BaseEstimator):
         """Return asymptotic BRAT-D reproduction intervals."""
         center = self.predict(X)
         r_norm = self._weight_norms(X)
-        scale = brat_d_scale(self.learning_rate, self.dropout_rate)
+        q = 1 - self.dropout_rate
+        scale = (1 + self.learning_rate * q) / self.learning_rate
         se = np.sqrt(2) * scale * np.sqrt(self.sigma_hat2_) * r_norm
         interval = normal_interval(center, se, alpha=alpha)
         return interval.lower, interval.upper
@@ -236,11 +238,11 @@ class BRATDRegressor(ConformalIntervalMixin, RegressorMixin, BaseEstimator):
             return y
 
         q = 1 - self.dropout_rate
-        keep_count = int(np.round(q * len(self.estimators_)))
-        if keep_count == 0:
+        keep_mask = rng.random(len(self.estimators_)) < q
+        selected = np.flatnonzero(keep_mask)
+        if selected.size == 0:
             return y
 
-        selected = rng.choice(len(self.estimators_), size=keep_count, replace=False)
         pred = np.zeros(X.shape[0], dtype=float)
         for idx in selected:
             pred += self.estimators_[int(idx)].predict(X)
@@ -255,8 +257,12 @@ class BRATDRegressor(ConformalIntervalMixin, RegressorMixin, BaseEstimator):
             raise ValueError("learning_rate must be positive.")
         if not 0 < self.subsample_rate <= 1:
             raise ValueError("subsample_rate must be in (0, 1].")
-        if not 0 <= self.dropout_rate <= 1:
-            raise ValueError("dropout_rate must be between 0 and 1.")
+        if not 0 <= self.dropout_rate < 1:
+            raise ValueError(
+                "dropout_rate must be in [0, 1). "
+                "dropout_rate=1.0 is the random-forest limit and is not "
+                "currently supported by BRAT-D inference."
+            )
         if self.min_samples_split < 2:
             raise ValueError("min_samples_split must be at least 2.")
 
@@ -279,8 +285,9 @@ class BRATDRegressor(ConformalIntervalMixin, RegressorMixin, BaseEstimator):
 
     def _prediction_half_width(self, X: Any, alpha: float) -> np.ndarray:
         r_norm = self._weight_norms(X)
-        scale = brat_d_scale(self.learning_rate, self.dropout_rate)
-        se = scale * np.sqrt(self.sigma_hat2_) * np.sqrt(1 + r_norm**2)
+        q = 1 - self.dropout_rate
+        scale = (1 + self.learning_rate * q) / self.learning_rate
+        se = np.sqrt(self.sigma_hat2_ * (1 + (scale * r_norm) ** 2))
         return normal_quantile(alpha) * se
 
     def _prediction_calibration_scale(self, alpha: float) -> float:
