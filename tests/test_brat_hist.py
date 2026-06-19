@@ -1,0 +1,351 @@
+import pytest
+import numpy as np
+from sklearn.base import clone
+from sklearn.datasets import make_regression
+from sklearn.model_selection import train_test_split
+
+from boulevard.estimators.brat_hist import BRATDHistGradientBoostingRegressor
+
+
+def test_brat_d_hist_skeleton_is_sklearn_cloneable():
+    model = BRATDHistGradientBoostingRegressor(
+        learning_rate=0.8,
+        dropout_rate=0.2,
+        max_iter=3,
+        early_stopping=False,
+        random_state=0,
+    )
+
+    cloned = clone(model)
+
+    assert cloned.learning_rate == 0.8
+    assert cloned.dropout_rate == 0.2
+    assert cloned.max_iter == 3
+
+
+def test_brat_d_hist_fit_predict_smoke():
+    X, y = make_regression(
+        n_samples=80,
+        n_features=3,
+        noise=1.0,
+        random_state=0,
+    )
+    model = BRATDHistGradientBoostingRegressor(
+        max_iter=5,
+        learning_rate=0.8,
+        dropout_rate=0.2,
+        max_leaf_nodes=4,
+        min_samples_leaf=5,
+        max_bins=32,
+        random_state=0,
+    )
+
+    model.fit(X, y)
+    pred = model.predict(X[:7])
+
+    assert len(model._predictors) == 5
+    assert model.n_iter_ == 5
+    assert pred.shape == (7,)
+    assert np.all(np.isfinite(pred))
+
+
+def test_brat_d_hist_is_deterministic():
+    X, y = make_regression(
+        n_samples=80,
+        n_features=3,
+        noise=1.0,
+        random_state=0,
+    )
+    params = dict(
+        max_iter=5,
+        learning_rate=0.8,
+        dropout_rate=0.2,
+        max_leaf_nodes=4,
+        min_samples_leaf=5,
+        max_bins=32,
+        random_state=0,
+    )
+
+    first = BRATDHistGradientBoostingRegressor(**params).fit(X, y).predict(X)
+    second = BRATDHistGradientBoostingRegressor(**params).fit(X, y).predict(X)
+
+    np.testing.assert_allclose(first, second)
+
+
+def test_brat_d_hist_rejects_unsupported_sklearn_modes():
+    model = BRATDHistGradientBoostingRegressor(early_stopping=True)
+
+    with pytest.raises(ValueError, match="early_stopping"):
+        model.fit([[0.0], [1.0]], [0.0, 1.0])
+
+
+@pytest.mark.parametrize(
+    ("params", "message"),
+    [
+        ({"loss": "absolute_error"}, "squared_error"),
+        ({"learning_rate": 0.0}, "learning_rate"),
+        ({"dropout_rate": 1.0}, "dropout_rate"),
+        ({"warm_start": True}, "warm_start"),
+        ({"categorical_features": [0]}, "categorical_features"),
+        ({"monotonic_cst": [1]}, "monotonic_cst"),
+        ({"interaction_cst": [{0}]}, "interaction_cst"),
+        ({"max_iter": 0}, "max_iter"),
+        ({"max_bins": 1}, "max_bins"),
+    ],
+)
+def test_brat_d_hist_rejects_unsupported_parameters(params, message):
+    X = np.array([[0.0], [1.0], [2.0]])
+    y = np.array([0.0, 1.0, 2.0])
+    model = BRATDHistGradientBoostingRegressor(
+        early_stopping=False,
+        **params,
+    )
+
+    with pytest.raises(ValueError, match=message):
+        model.fit(X, y)
+
+
+def test_brat_d_hist_rejects_invalid_sample_weight():
+    X = np.array([[0.0], [1.0], [2.0]])
+    y = np.array([0.0, 1.0, 2.0])
+    model = BRATDHistGradientBoostingRegressor(
+        max_iter=2,
+        min_samples_leaf=1,
+        early_stopping=False,
+    )
+
+    with pytest.raises(ValueError, match="one-dimensional"):
+        model.fit(X, y, sample_weight=[[1.0], [1.0], [1.0]])
+
+    with pytest.raises(ValueError, match="negative"):
+        model.fit(X, y, sample_weight=[1.0, -1.0, 1.0])
+
+
+def test_brat_d_hist_predict_applies_signal_correction():
+    X, y = make_regression(
+        n_samples=90,
+        n_features=2,
+        noise=0.5,
+        random_state=0,
+    )
+    model = BRATDHistGradientBoostingRegressor(
+        max_iter=6,
+        learning_rate=0.7,
+        dropout_rate=0.2,
+        max_leaf_nodes=5,
+        min_samples_leaf=4,
+        max_bins=16,
+        random_state=0,
+    ).fit(X, y)
+
+    X_eval = X[:8]
+    X_binned = model._bin_data(X_eval)
+    tree_sum = model._predict_tree_sum_binned(
+        X_binned,
+        selected=None,
+        n_threads=model._effective_n_threads(),
+    )
+    q = 1 - model.dropout_rate
+    raw_boulevard = (model.learning_rate / len(model._predictors)) * tree_sum
+    expected = ((1 + model.learning_rate * q) / model.learning_rate) * raw_boulevard
+
+    np.testing.assert_allclose(model.predict(X_eval), expected)
+
+
+def test_brat_d_hist_cell_metadata_compresses_duplicate_bins():
+    X = np.array(
+        [
+            [0.0, 0.0],
+            [0.0, 0.0],
+            [0.5, 0.5],
+            [0.5, 0.5],
+            [1.0, 1.0],
+            [1.0, 1.0],
+        ]
+    )
+    y = np.array([0.0, 0.1, 1.0, 1.1, 2.0, 2.1])
+    model = BRATDHistGradientBoostingRegressor(
+        max_iter=3,
+        learning_rate=0.5,
+        dropout_rate=0.0,
+        max_leaf_nodes=3,
+        min_samples_leaf=1,
+        max_bins=8,
+        random_state=0,
+    ).fit(X, y)
+
+    assert model.observed_cells_.shape[0] == 3
+    np.testing.assert_array_equal(model.cell_counts_, np.array([2.0, 2.0, 2.0]))
+
+    cell_indices = model.apply_cell_indices(X)
+    assert cell_indices[0] == cell_indices[1]
+    assert cell_indices[2] == cell_indices[3]
+    assert cell_indices[4] == cell_indices[5]
+
+
+def test_brat_d_hist_prepare_inference_uses_centered_residual_variance():
+    X, y = make_regression(
+        n_samples=80,
+        n_features=2,
+        noise=1.0,
+        random_state=0,
+    )
+    X_train, X_calib, y_train, y_calib = train_test_split(
+        X,
+        y,
+        test_size=0.25,
+        random_state=0,
+    )
+    model = BRATDHistGradientBoostingRegressor(
+        max_iter=5,
+        learning_rate=0.6,
+        dropout_rate=0.25,
+        max_leaf_nodes=4,
+        min_samples_leaf=5,
+        max_bins=16,
+        random_state=0,
+    ).fit(X_train, y_train)
+
+    with pytest.raises(ValueError, match="provided together"):
+        model.prepare_inference(X_calib=X_calib)
+
+    model.prepare_inference(X_calib, y_calib)
+
+    residuals = y_calib - model.predict(X_calib)
+    assert model.sigma_hat2_ == pytest.approx(float(np.var(residuals, ddof=1)))
+    assert model.inference_method_ == "histogram_cell"
+
+
+def test_brat_d_hist_cached_weight_norms_match_direct_solve_for_cells():
+    levels = np.linspace(0.0, 1.0, 12)
+    X = np.column_stack([levels, levels])
+    y = np.sin(2 * np.pi * levels) + 0.2 * levels
+    model = BRATDHistGradientBoostingRegressor(
+        max_iter=6,
+        learning_rate=0.5,
+        dropout_rate=0.25,
+        max_leaf_nodes=4,
+        min_samples_leaf=1,
+        max_bins=16,
+        random_state=0,
+    ).fit(X, y)
+    model.prepare_inference()
+
+    X_query = np.array(
+        [
+            [levels[0], levels[0]],
+            [levels[3], levels[3]],
+            [levels[0], levels[-1]],
+            [levels[-1], levels[0]],
+        ]
+    )
+    cell_indices = model.apply_cell_indices(X_query)
+    assert np.any(cell_indices >= 0)
+    assert np.any(cell_indices < 0)
+
+    cached_norms = model.weight_norms(X_query)
+    X_binned = model._bin_data(X_query)
+    leaf_indices = model._apply_leaf_indices_binned(X_binned)
+    kernel_vectors = model._cell_kernel_vector(leaf_indices)
+    weights = model._solve_cell_brat_d_weights(kernel_vectors)
+    direct_norms = np.sqrt(np.maximum((weights**2) @ model.cell_counts_, 0.0))
+
+    np.testing.assert_allclose(cached_norms, direct_norms)
+
+
+def test_brat_d_hist_interval_widths_are_ordered():
+    X, y = make_regression(
+        n_samples=120,
+        n_features=2,
+        noise=1.0,
+        random_state=0,
+    )
+    X_train, X_calib, y_train, y_calib = train_test_split(
+        X,
+        y,
+        test_size=0.25,
+        random_state=0,
+    )
+    model = BRATDHistGradientBoostingRegressor(
+        max_iter=8,
+        learning_rate=0.6,
+        dropout_rate=0.25,
+        max_leaf_nodes=5,
+        min_samples_leaf=5,
+        max_bins=16,
+        random_state=0,
+    ).fit(X_train, y_train)
+    model.prepare_inference(X_calib, y_calib)
+
+    ci_lower, ci_upper = model.confidence_interval(X_calib[:8])
+    pi_lower, pi_upper = model.prediction_interval(X_calib[:8])
+    ri_lower, ri_upper = model.reproduction_interval(X_calib[:8])
+
+    ci_width = ci_upper - ci_lower
+    pi_width = pi_upper - pi_lower
+    ri_width = ri_upper - ri_lower
+
+    assert np.all(ci_width > 0)
+    assert np.all(pi_width >= ci_width)
+    np.testing.assert_allclose(ri_width, np.sqrt(2) * ci_width)
+
+
+def test_brat_d_hist_observed_cell_inference_smoke():
+    X, y = make_regression(
+        n_samples=120,
+        n_features=2,
+        noise=1.0,
+        random_state=0,
+    )
+    X_train, X_calib, y_train, y_calib = train_test_split(
+        X,
+        y,
+        test_size=0.25,
+        random_state=0,
+    )
+    model = BRATDHistGradientBoostingRegressor(
+        max_iter=8,
+        learning_rate=0.6,
+        dropout_rate=0.25,
+        max_leaf_nodes=5,
+        min_samples_leaf=5,
+        max_bins=16,
+        random_state=0,
+    ).fit(X_train, y_train)
+
+    with pytest.raises(RuntimeError, match="prepare_inference"):
+        model.confidence_interval(X_calib[:3])
+
+    model.prepare_inference(X_calib, y_calib)
+
+    assert model.observed_cells_.ndim == 2
+    assert model.cell_counts_.sum() == X_train.shape[0]
+    assert model.cell_kernel_matrix_.shape == (
+        model.observed_cells_.shape[0],
+        model.observed_cells_.shape[0],
+    )
+    train_cell_indices = model.apply_cell_indices(X_train[:5])
+    assert np.all(train_cell_indices >= 0)
+
+    ci_lower, ci_upper = model.confidence_interval(X_calib[:6])
+    pi_lower, pi_upper = model.prediction_interval(X_calib[:6])
+    ri_lower, ri_upper = model.reproduction_interval(X_calib[:6])
+    norms = model.weight_norms(X_calib[:6])
+    train_norms = model.weight_norms(X_train[:5])
+
+    for lower, upper in [
+        (ci_lower, ci_upper),
+        (pi_lower, pi_upper),
+        (ri_lower, ri_upper),
+    ]:
+        assert lower.shape == upper.shape == (6,)
+        assert np.all(np.isfinite(lower))
+        assert np.all(np.isfinite(upper))
+        assert np.all(lower <= upper)
+    assert norms.shape == (6,)
+    assert np.all(np.isfinite(norms))
+    assert np.all(norms >= 0)
+    np.testing.assert_allclose(
+        train_norms,
+        model.cell_weight_norms_[train_cell_indices],
+    )
