@@ -1,5 +1,5 @@
-import pytest
 import numpy as np
+import pytest
 from sklearn.base import clone
 from sklearn.datasets import make_regression
 from sklearn.model_selection import train_test_split
@@ -47,6 +47,66 @@ def test_brat_d_hist_fit_predict_smoke():
     assert model.n_iter_ == 5
     assert pred.shape == (7,)
     assert np.all(np.isfinite(pred))
+
+    diagnostics = model.fit_diagnostics_
+    expected_keys = {
+        "total_seconds",
+        "binning_seconds",
+        "cell_metadata_seconds",
+        "residual_seconds",
+        "gradient_seconds",
+        "grower_setup_seconds",
+        "grower_grow_seconds",
+        "predictor_seconds",
+        "training_prediction_cache_seconds",
+        "score_seconds",
+        "residual_tree_prediction_calls",
+        "residual_tree_traversal_calls",
+        "residual_cache_hit_rounds",
+        "residual_zero_keep_rounds",
+    }
+    assert set(diagnostics) == expected_keys
+    assert diagnostics["total_seconds"] > 0
+    assert diagnostics["residual_tree_prediction_calls"] >= 0
+    assert diagnostics["residual_tree_traversal_calls"] == 0
+    assert diagnostics["residual_zero_keep_rounds"] >= 0
+    assert model._train_tree_predictions_.shape == (X.shape[0], model.max_iter)
+
+
+def test_brat_d_hist_caches_training_tree_predictions():
+    X, y = make_regression(
+        n_samples=50,
+        n_features=2,
+        noise=0.5,
+        random_state=0,
+    )
+    model = BRATDHistGradientBoostingRegressor(
+        max_iter=4,
+        learning_rate=0.7,
+        dropout_rate=0.0,
+        max_leaf_nodes=4,
+        min_samples_leaf=3,
+        max_bins=16,
+        random_state=0,
+    ).fit(X, y)
+
+    direct_columns = []
+    for predictor_group in model._predictors:
+        direct_columns.append(
+            predictor_group[0].predict_binned(
+                model.X_binned_train_,
+                model._bin_mapper.missing_values_bin_idx_,
+                model._effective_n_threads(),
+            )
+        )
+
+    np.testing.assert_allclose(
+        model._train_tree_predictions_,
+        np.column_stack(direct_columns),
+    )
+    assert model.fit_diagnostics_["residual_tree_prediction_calls"] == 6
+    assert model.fit_diagnostics_["residual_tree_traversal_calls"] == 0
+    assert model.fit_diagnostics_["residual_cache_hit_rounds"] == 3
 
 
 def test_brat_d_hist_is_deterministic():

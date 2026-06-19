@@ -26,7 +26,10 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--output",
-        help="Optional path for saving the plot. If omitted, show an interactive window.",
+        help=(
+            "Optional path for saving the plot. If omitted, show an "
+            "interactive window."
+        ),
     )
     args = parser.parse_args()
 
@@ -34,11 +37,7 @@ def main() -> None:
     noise_std = 0.12
     X = np.linspace(0, 1, 1000).reshape(-1, 1)
     x = X[:, 0]
-    truth = (
-        np.sin(2 * np.pi * x)
-        + 0.35 * np.sin(6 * np.pi * x)
-        + 0.6 * (x - 0.5) ** 2
-    )
+    truth = np.sin(2 * np.pi * x) + 0.35 * np.sin(6 * np.pi * x) + 0.6 * (x - 0.5) ** 2
     y = truth + rng.normal(scale=noise_std, size=X.shape[0])
 
     train_idx, test_idx = train_test_split(
@@ -51,13 +50,13 @@ def main() -> None:
     truth_test = truth[test_idx]
 
     brat_hist = BRATDHistGradientBoostingRegressor(
-        max_iter=500,
+        max_iter=1000,
         learning_rate=0.45,
         dropout_rate=0.3,
         max_depth=10,
         max_leaf_nodes=1024,
         min_samples_leaf=5,
-        max_bins=128,
+        max_bins=255,
         l2_regularization=0.0,
         early_stopping=False,
         random_state=0,
@@ -66,6 +65,40 @@ def main() -> None:
     brat_train_start = time.perf_counter()
     brat_hist.fit(X_train, y_train)
     brat_train_seconds = time.perf_counter() - brat_train_start
+    brat_fit_diagnostics = brat_hist.fit_diagnostics_
+    brat_fit_total_seconds = brat_fit_diagnostics["total_seconds"]
+    brat_fit_tree_seconds = (
+        brat_fit_diagnostics["grower_setup_seconds"]
+        + brat_fit_diagnostics["grower_grow_seconds"]
+        + brat_fit_diagnostics["predictor_seconds"]
+    )
+    brat_fit_cache_seconds = brat_fit_diagnostics["training_prediction_cache_seconds"]
+    brat_fit_residual_share = (
+        brat_fit_diagnostics["residual_seconds"] / brat_fit_total_seconds
+    )
+    brat_fit_tree_share = brat_fit_tree_seconds / brat_fit_total_seconds
+    brat_fit_cache_share = brat_fit_cache_seconds / brat_fit_total_seconds
+    brat_fit_accounted_seconds = sum(
+        brat_fit_diagnostics[key]
+        for key in [
+            "binning_seconds",
+            "cell_metadata_seconds",
+            "residual_seconds",
+            "gradient_seconds",
+            "grower_setup_seconds",
+            "grower_grow_seconds",
+            "predictor_seconds",
+            "training_prediction_cache_seconds",
+            "score_seconds",
+        ]
+    )
+    brat_fit_untracked_seconds = max(
+        brat_fit_diagnostics["total_seconds"] - brat_fit_accounted_seconds,
+        0.0,
+    )
+    expected_residual_tree_prediction_calls = (
+        (1 - brat_hist.dropout_rate) * brat_hist.max_iter * (brat_hist.max_iter - 1) / 2
+    )
 
     brat_inference_start = time.perf_counter()
     brat_hist.prepare_inference(X_test, y_test)
@@ -91,7 +124,7 @@ def main() -> None:
 
     vanilla_hgb = HistGradientBoostingRegressor(
         loss="squared_error",
-        max_iter=180,
+        max_iter=1000,
         learning_rate=0.06,
         max_leaf_nodes=8,
         min_samples_leaf=8,
@@ -177,10 +210,7 @@ def main() -> None:
 
     z_975 = 1.959963984540054
     brat_ci_half_width = (
-        z_975
-        * signal_scale
-        * np.sqrt(brat_hist.sigma_hat2_)
-        * brat_weight_norms
+        z_975 * signal_scale * np.sqrt(brat_hist.sigma_hat2_) * brat_weight_norms
     )
     brat_ci_lower = brat_pred - brat_ci_half_width
     brat_ci_upper = brat_pred + brat_ci_half_width
@@ -208,7 +238,9 @@ def main() -> None:
     brat_test_truth_rmse = _rmse(truth_test, brat_test_pred)
     exact_test_truth_rmse = _rmse(truth_test, exact_test_pred)
     vanilla_test_truth_rmse = _rmse(truth_test, vanilla_test_pred)
-    brat_ci_truth_coverage = _coverage(truth_test, brat_ci_test_lower, brat_ci_test_upper)
+    brat_ci_truth_coverage = _coverage(
+        truth_test, brat_ci_test_lower, brat_ci_test_upper
+    )
     brat_pi_y_coverage = _coverage(y_test, brat_pi_test_lower, brat_pi_test_upper)
     exact_ci_truth_coverage = _coverage(
         truth_test,
@@ -342,15 +374,34 @@ def main() -> None:
             np.nan,
         ]
     )
-    timing_ax.bar(positions - bar_width, hist_times, width=bar_width, label="BRAT-D hist")
+    timing_ax.bar(
+        positions - bar_width, hist_times, width=bar_width, label="BRAT-D hist"
+    )
     timing_ax.bar(positions, exact_times, width=bar_width, label="BRAT-D exact")
-    timing_ax.bar(positions + bar_width, vanilla_times, width=bar_width, label="vanilla HGBR")
+    timing_ax.bar(
+        positions + bar_width, vanilla_times, width=bar_width, label="vanilla HGBR"
+    )
     timing_ax.set_title("Wall-clock timing comparison")
     timing_ax.set_xticks(positions)
     timing_ax.set_xticklabels(timing_labels, rotation=20)
     timing_ax.set_ylabel("seconds")
     timing_ax.set_yscale("log")
     timing_ax.legend(loc="best", fontsize=8)
+    timing_ax.text(
+        0.02,
+        0.95,
+        "BRAT-D hist fit split\n"
+        f"residual: {brat_fit_diagnostics['residual_seconds']:.2f}s\n"
+        f"tree grow: {brat_fit_tree_seconds:.2f}s\n"
+        f"cache: {brat_fit_cache_seconds:.2f}s\n"
+        f"resid traversals: "
+        f"{brat_fit_diagnostics['residual_tree_traversal_calls']:,}",
+        transform=timing_ax.transAxes,
+        va="top",
+        ha="left",
+        fontsize=8,
+        bbox={"facecolor": "white", "alpha": 0.75, "edgecolor": "none"},
+    )
 
     width_ax = fig.add_subplot(grid[1, 1])
     width_ax.plot(
@@ -445,6 +496,56 @@ def main() -> None:
     print(f"BRAT-D hist training wall-clock seconds: {brat_train_seconds:.6f}")
     print(f"BRAT-D exact training wall-clock seconds: {exact_train_seconds:.6f}")
     print(f"vanilla HGBR training wall-clock seconds: {vanilla_train_seconds:.6f}")
+    print(f"BRAT-D hist fit diagnostic total seconds: {brat_fit_total_seconds:.6f}")
+    print(
+        "BRAT-D hist fit binning/cell seconds: "
+        f"{brat_fit_diagnostics['binning_seconds']:.6f}/"
+        f"{brat_fit_diagnostics['cell_metadata_seconds']:.6f}"
+    )
+    print(
+        "BRAT-D hist fit residual seconds/share: "
+        f"{brat_fit_diagnostics['residual_seconds']:.6f}/"
+        f"{brat_fit_residual_share:.2%}"
+    )
+    print(
+        "BRAT-D hist fit tree setup/grow/predictor/cache seconds: "
+        f"{brat_fit_diagnostics['grower_setup_seconds']:.6f}/"
+        f"{brat_fit_diagnostics['grower_grow_seconds']:.6f}/"
+        f"{brat_fit_diagnostics['predictor_seconds']:.6f}/"
+        f"{brat_fit_cache_seconds:.6f}"
+    )
+    print(
+        "BRAT-D hist fit tree-related seconds/share: "
+        f"{brat_fit_tree_seconds:.6f}/"
+        f"{brat_fit_tree_share:.2%}"
+    )
+    print(
+        "BRAT-D hist fit training-prediction-cache seconds/share: "
+        f"{brat_fit_cache_seconds:.6f}/"
+        f"{brat_fit_cache_share:.2%}"
+    )
+    print(
+        "BRAT-D hist fit gradient/untracked seconds: "
+        f"{brat_fit_diagnostics['gradient_seconds']:.6f}/"
+        f"{brat_fit_untracked_seconds:.6f}"
+    )
+    print(
+        "BRAT-D hist residual selected old-tree columns actual/expected: "
+        f"{brat_fit_diagnostics['residual_tree_prediction_calls']}/"
+        f"{expected_residual_tree_prediction_calls:.1f}"
+    )
+    print(
+        "BRAT-D hist residual tree traversal calls after cache: "
+        f"{brat_fit_diagnostics['residual_tree_traversal_calls']}"
+    )
+    print(
+        "BRAT-D hist residual cache-hit rounds: "
+        f"{brat_fit_diagnostics['residual_cache_hit_rounds']}"
+    )
+    print(
+        "BRAT-D hist residual zero-kept-tree rounds: "
+        f"{brat_fit_diagnostics['residual_zero_keep_rounds']}"
+    )
     print(
         "BRAT-D hist inference prep wall-clock seconds: "
         f"{brat_inference_seconds:.6f}"
@@ -485,7 +586,10 @@ def main() -> None:
     print(f"BRAT-D hist RI test wall-clock seconds: {brat_hist_ri_seconds:.6f}")
     print(f"BRAT-D exact CI test wall-clock seconds: {exact_ci_seconds:.6f}")
     print(f"BRAT-D exact PI test wall-clock seconds: {exact_pi_seconds:.6f}")
-    print(f"BRAT-D hist observed cells / train rows: {observed_cell_count}/{X_train.shape[0]}")
+    print(
+        "BRAT-D hist observed cells / train rows: "
+        f"{observed_cell_count}/{X_train.shape[0]}"
+    )
     print(f"BRAT-D hist observed-cell compression ratio: {cell_compression_ratio:.6f}")
     print(f"BRAT-D hist cell count sum: {cell_count_sum:.0f}")
     print(f"BRAT-D hist train unseen-cell rate: {train_unseen_cell_rate:.6f}")
@@ -514,7 +618,9 @@ def main() -> None:
     )
     print(f"BRAT-D hist CI truth coverage on test split: {brat_ci_truth_coverage:.6f}")
     print(f"BRAT-D hist PI y coverage on test split: {brat_pi_y_coverage:.6f}")
-    print(f"BRAT-D exact CI truth coverage on test split: {exact_ci_truth_coverage:.6f}")
+    print(
+        f"BRAT-D exact CI truth coverage on test split: {exact_ci_truth_coverage:.6f}"
+    )
     print(f"BRAT-D exact PI y coverage on test split: {exact_pi_y_coverage:.6f}")
     print(
         "BRAT-D hist min PI-width minus CI-width on test split: "
