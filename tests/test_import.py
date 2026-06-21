@@ -1,5 +1,8 @@
 import boulevard as bd
-from boulevard.estimators import BRATDHistGradientBoostingRegressor
+from boulevard.estimators import (
+    BRATDHistGradientBoostingRegressor,
+    BRATPHistGradientBoostingRegressor,
+)
 
 
 def test_import_boulevard():
@@ -20,3 +23,18 @@ def test_brat_d_hist_is_public_api():
     assert model.get_params()["dropout_rate"] == 0.2
     model.set_params(max_iter=4)
     assert model.max_iter == 4
+
+
+def test_brat_p_hist_is_public_api():
+    assert bd.BRATPHistGradientBoostingRegressor is BRATPHistGradientBoostingRegressor
+
+    model = bd.BRATPHistGradientBoostingRegressor(
+        n_rounds=3,
+        trees_per_round=2,
+        early_stopping=False,
+    )
+
+    assert model.get_params()["n_rounds"] == 3
+    assert model.get_params()["trees_per_round"] == 2
+    model.set_params(n_rounds=4)
+    assert model.n_rounds == 4

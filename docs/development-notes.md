@@ -1,5 +1,89 @@
 # Development Notes
 
+## 2026-06-21: Experimental histogram BRAT-P backend
+
+This work adds the first serial histogram-tree BRAT-P estimator:
+
+```python
+BRATPHistGradientBoostingRegressor
+```
+
+The class lives in `boulevard.estimators.bratp` and is exported from top-level
+`boulevard` as `bd.BRATPHistGradientBoostingRegressor`. Its public training API
+uses the BRAT-P round/slot structure:
+
+```python
+model = bd.BRATPHistGradientBoostingRegressor(
+    n_rounds=60,
+    trees_per_round=4,
+    subsample_rate=0.8,
+    early_stopping=False,
+)
+```
+
+The first implementation trains the round/slot structure serially. It is not yet
+parallelized, but it follows the deterministic BRAT-P residual construction:
+
+- first round is warm-started by sequential boosting steps;
+- later rounds train one tree per slot;
+- the residual for slot `k` drops slot `k` from previous rounds and uses the
+  other slots averaged over previous rounds.
+
+The estimator reuses the observed histogram-cell inference machinery from the
+BRAT-D histogram estimator, but the BRAT-P linear system is different. A
+diagnostic found severe undercoverage in the first BRAT-P CI implementation:
+
+```text
+RMSE vs true signal: 0.0842
+95% CI coverage vs true signal: 0.373
+median 95% CI half-width: 0.0416
+```
+
+The issue was not prediction RMSE. It was an inference scaling bug. The code
+initially used the unscaled system
+
+```text
+I + (K - 1) K_n
+```
+
+but the BRAT-P plug-in weights are based on
+
+```text
+K^{-1} I + ((K - 1) / K) K_n
+```
+
+where `K = trees_per_round`. Equivalently, the correct BRAT-P weights are `K`
+times the weights from the unscaled system. After applying this scaling, the
+same quickstart diagnostic reports:
+
+```text
+RMSE vs true signal: 0.0842
+median abs error vs true signal: 0.0560
+95% CI coverage vs true signal: 0.937
+95% PI coverage vs noisy y: 0.977
+median 95% CI half-width: 0.1666
+```
+
+The quickstart script is:
+
+```bash
+python examples/bratp_quickstart.py
+```
+
+The visual diagnostic script is:
+
+```bash
+python examples/bratp_visual_check.py --output /tmp/bratp_visual_check.png
+```
+
+It plots the fitted signal, confidence and prediction bands, interval widths,
+BRAT-P weight norms, signal error against CI half-width, and calibration
+residuals.
+
+Tests now include a regression check that compares the scaled BRAT-P cell system
+against the unscaled system and verifies that the norm changes by the expected
+factor `trees_per_round`.
+
 ## 2026-06-19: Experimental histogram BRAT-D backend
 
 This commit adds the first working experimental histogram-tree BRAT-D estimator:

@@ -79,6 +79,49 @@ research diagnostics and currently reports timing for binning, BRAT-D residual
 construction, tree fitting, training-prediction caching, and interval-related
 cache behavior.
 
+### `BRATPHistGradientBoostingRegressor`
+
+Experimental sklearn histogram-tree backend for BRAT-P parallelized Boulevard
+training.
+
+```python
+import boulevard as bd
+
+model = bd.BRATPHistGradientBoostingRegressor(
+    n_rounds=100,
+    trees_per_round=5,
+    subsample_rate=0.8,
+    max_depth=10,
+    max_leaf_nodes=1024,
+    min_samples_leaf=5,
+    max_bins=255,
+    early_stopping=False,
+    random_state=0,
+)
+model.fit(X_train, y_train)
+pred = model.predict(X_test)
+```
+
+This first implementation trains the BRAT-P round/slot structure serially. It
+uses deterministic slot dropping in the residual construction and exposes the
+same observed histogram-cell interval interface as the BRAT-D histogram
+estimator. The BRAT-P interval weights use the parallel KRR system
+`K^{-1} I + ((K - 1) / K) K_n`, where `K = trees_per_round`.
+
+The quickstart script prints RMSE, CI/PI coverage, interval widths, timing, and
+sample prediction intervals:
+
+```bash
+python examples/bratp_quickstart.py
+```
+
+For a plotted diagnostic of the fitted signal, confidence and prediction bands,
+weight norms, interval widths, and calibration residuals:
+
+```bash
+python examples/bratp_visual_check.py --output /tmp/bratp_visual_check.png
+```
+
 ### `BRATDRegressor`
 
 Exact sample-space BRAT-D prototype based on sklearn decision trees. This class
