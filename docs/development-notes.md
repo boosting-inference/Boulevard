@@ -8,8 +8,8 @@ This commit adds the first working experimental histogram-tree BRAT-D estimator:
 BRATDHistGradientBoostingRegressor
 ```
 
-The class lives in `boulevard.estimators.brat_hist` and is intentionally not
-exported from top-level `boulevard` yet. It inherits sklearn's public
+The class lives in `boulevard.estimators.bratd` and is exported from top-level
+`boulevard` as `bd.BRATDHistGradientBoostingRegressor`. It inherits sklearn's public
 `HistGradientBoostingRegressor` API shape, but replaces the boosting loop with a
 custom BRAT-D loop using sklearn's private histogram internals:
 

@@ -11,7 +11,7 @@ from sklearn.metrics import mean_squared_error
 from sklearn.model_selection import train_test_split
 
 from boulevard.estimators.brat import BRATDRegressor
-from boulevard.estimators.brat_hist import BRATDHistGradientBoostingRegressor
+from boulevard.estimators.bratd import BRATDHistGradientBoostingRegressor
 
 
 def _rmse(y_true: np.ndarray, y_pred: np.ndarray) -> float:
