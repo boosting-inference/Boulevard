@@ -44,6 +44,7 @@ class BRATDHistGradientBoostingRegressor(HistGradientBoostingRegressor):
         quantile: float | None = None,
         learning_rate: float = 1.0,
         dropout_rate: float = 0.5,
+        subsample_rate: float = 1.0,
         max_iter: int = 100,
         max_leaf_nodes: int | None = 31,
         max_depth: int | None = None,
@@ -85,6 +86,7 @@ class BRATDHistGradientBoostingRegressor(HistGradientBoostingRegressor):
             random_state=random_state,
         )
         self.dropout_rate = dropout_rate
+        self.subsample_rate = subsample_rate
 
     def fit(
         self,
@@ -107,6 +109,7 @@ class BRATDHistGradientBoostingRegressor(HistGradientBoostingRegressor):
         residual_tree_traversal_calls = 0
         residual_cache_hit_rounds = 0
         residual_zero_keep_rounds = 0
+        sampled_training_rows = 0
 
         self._check_histogram_backend()
         self._validate_brat_d_params()
@@ -154,6 +157,7 @@ class BRATDHistGradientBoostingRegressor(HistGradientBoostingRegressor):
         self.n_trees_per_iteration_ = 1
         self._predictors: list[list[TreePredictor]] = []
         self._train_tree_predictions_ = np.empty((X_binned.shape[0], self.max_iter))
+        self.in_bag_matrix_ = np.zeros((X_binned.shape[0], self.max_iter), dtype=bool)
         self.train_score_: list[float] = []
         self.conformal_interval_ = None
 
@@ -176,21 +180,25 @@ class BRATDHistGradientBoostingRegressor(HistGradientBoostingRegressor):
             if iteration > 0 and selected_count == 0:
                 residual_zero_keep_rounds += 1
 
+            in_bag = self._sample_in_bag_indices(X_binned.shape[0], rng)
+            self.in_bag_matrix_[in_bag, iteration] = True
+            sampled_training_rows += int(in_bag.size)
+
             step_start = time.perf_counter()
-            gradients = np.ascontiguousarray(-residuals, dtype=G_H_DTYPE)
+            gradients = np.ascontiguousarray(-residuals[in_bag], dtype=G_H_DTYPE)
             if sample_weight is None:
                 hessians = np.ones(1, dtype=G_H_DTYPE)
             else:
                 gradients = np.ascontiguousarray(
-                    gradients * sample_weight,
+                    gradients * sample_weight[in_bag],
                     dtype=G_H_DTYPE,
                 )
-                hessians = np.ascontiguousarray(sample_weight, dtype=G_H_DTYPE)
+                hessians = np.ascontiguousarray(sample_weight[in_bag], dtype=G_H_DTYPE)
             gradient_seconds += time.perf_counter() - step_start
 
             step_start = time.perf_counter()
             grower = self._make_tree_grower(
-                X_binned=X_binned,
+                X_binned=np.asfortranarray(X_binned[in_bag]),
                 gradients=gradients,
                 hessians=hessians,
                 n_bins=n_bins,
@@ -243,6 +251,7 @@ class BRATDHistGradientBoostingRegressor(HistGradientBoostingRegressor):
             "residual_tree_traversal_calls": residual_tree_traversal_calls,
             "residual_cache_hit_rounds": residual_cache_hit_rounds,
             "residual_zero_keep_rounds": residual_zero_keep_rounds,
+            "sampled_training_rows": sampled_training_rows,
         }
         return self
 
@@ -323,18 +332,28 @@ class BRATDHistGradientBoostingRegressor(HistGradientBoostingRegressor):
         X: Any,
         alpha: float | None = None,
         method: str = "asymptotic",
+        X_calib: Any | None = None,
+        y_calib: Any | None = None,
     ) -> tuple[np.ndarray, np.ndarray]:
         """Return asymptotic prediction intervals."""
         if method != "asymptotic":
             raise ValueError("Only method='asymptotic' is implemented for BRAT-D hist.")
-        return self.prediction_interval(X, alpha=0.05 if alpha is None else alpha)
+        return self.prediction_interval(
+            X,
+            alpha=0.05 if alpha is None else alpha,
+            X_calib=X_calib,
+            y_calib=y_calib,
+        )
 
     def confidence_interval(
         self,
         X: Any,
         alpha: float = 0.05,
+        X_calib: Any | None = None,
+        y_calib: Any | None = None,
     ) -> tuple[np.ndarray, np.ndarray]:
         """Return observed-cell asymptotic confidence intervals for ``f(x)``."""
+        self._ensure_inference_prepared(X_calib=X_calib, y_calib=y_calib)
         center = self.predict(X)
         r_norm = self._weight_norms(X)
         q = 1 - self.dropout_rate
@@ -348,8 +367,11 @@ class BRATDHistGradientBoostingRegressor(HistGradientBoostingRegressor):
         X: Any,
         alpha: float = 0.05,
         calibrated: bool = False,
+        X_calib: Any | None = None,
+        y_calib: Any | None = None,
     ) -> tuple[np.ndarray, np.ndarray]:
         """Return observed-cell asymptotic prediction intervals for ``y | x``."""
+        self._ensure_inference_prepared(X_calib=X_calib, y_calib=y_calib)
         center = self.predict(X)
         half_width = self._prediction_half_width(X, alpha=alpha)
         if calibrated:
@@ -360,8 +382,11 @@ class BRATDHistGradientBoostingRegressor(HistGradientBoostingRegressor):
         self,
         X: Any,
         alpha: float = 0.05,
+        X_calib: Any | None = None,
+        y_calib: Any | None = None,
     ) -> tuple[np.ndarray, np.ndarray]:
         """Return observed-cell asymptotic reproduction intervals."""
+        self._ensure_inference_prepared(X_calib=X_calib, y_calib=y_calib)
         center = self.predict(X)
         r_norm = self._weight_norms(X)
         q = 1 - self.dropout_rate
@@ -372,6 +397,7 @@ class BRATDHistGradientBoostingRegressor(HistGradientBoostingRegressor):
 
     def weight_norms(self, X: Any) -> np.ndarray:
         """Return observed-cell BRAT-D weight norms used by intervals."""
+        self._ensure_inference_prepared()
         return self._weight_norms(X)
 
     @staticmethod
@@ -392,6 +418,8 @@ class BRATDHistGradientBoostingRegressor(HistGradientBoostingRegressor):
             raise ValueError("learning_rate must be positive.")
         if not 0 <= self.dropout_rate < 1:
             raise ValueError("dropout_rate must be in [0, 1).")
+        if not 0 < self.subsample_rate <= 1:
+            raise ValueError("subsample_rate must be in (0, 1].")
         if self.warm_start:
             raise ValueError(
                 "warm_start is not supported for BRAT-D histogram fitting."
@@ -417,9 +445,22 @@ class BRATDHistGradientBoostingRegressor(HistGradientBoostingRegressor):
             raise ValueError("max_iter must be at least 1.")
         if self.max_bins < 2:
             raise ValueError("max_bins must be at least 2.")
+        if self.max_bins > 255:
+            raise ValueError("max_bins cannot exceed 255 for sklearn histogram trees.")
 
     def _effective_n_threads(self) -> int:
         return 1
+
+    def _sample_in_bag_indices(
+        self,
+        n_samples: int,
+        rng: np.random.Generator,
+    ) -> np.ndarray:
+        if self.subsample_rate == 1.0:
+            return np.arange(n_samples)
+
+        n_in_bag = max(1, int(np.ceil(self.subsample_rate * n_samples)))
+        return np.sort(rng.choice(n_samples, size=n_in_bag, replace=False))
 
     def _bin_data(self, X: np.ndarray) -> np.ndarray:
         return np.ascontiguousarray(self._bin_mapper.transform(X))
@@ -687,13 +728,30 @@ class BRATDHistGradientBoostingRegressor(HistGradientBoostingRegressor):
         quantile_level = min(quantile_level, 1.0)
         return float(np.quantile(ratios, quantile_level, method="higher"))
 
+    def _ensure_inference_prepared(
+        self,
+        *,
+        X_calib: Any | None = None,
+        y_calib: Any | None = None,
+    ) -> None:
+        if (X_calib is None) != (y_calib is None):
+            raise ValueError("X_calib and y_calib must be provided together.")
+        if X_calib is not None:
+            self.prepare_inference(X_calib, y_calib)
+            return
+        if not self._is_inference_prepared():
+            self.prepare_inference()
+
+    def _is_inference_prepared(self) -> bool:
+        return (
+            hasattr(self, "cell_kernel_matrix_")
+            and hasattr(self, "cell_weight_norms_")
+            and hasattr(self, "sigma_hat2_")
+        )
+
     def _check_inference_prepared(self) -> None:
         check_is_fitted(self, "_predictors")
-        if (
-            not hasattr(self, "cell_kernel_matrix_")
-            or not hasattr(self, "cell_weight_norms_")
-            or not hasattr(self, "sigma_hat2_")
-        ):
+        if not self._is_inference_prepared():
             raise RuntimeError(
                 "BRAT-D histogram asymptotic intervals require "
                 "prepare_inference(...) before calling interval methods."

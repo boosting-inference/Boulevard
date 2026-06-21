@@ -11,6 +11,7 @@ def test_brat_d_hist_skeleton_is_sklearn_cloneable():
     model = BRATDHistGradientBoostingRegressor(
         learning_rate=0.8,
         dropout_rate=0.2,
+        subsample_rate=0.7,
         max_iter=3,
         early_stopping=False,
         random_state=0,
@@ -20,6 +21,7 @@ def test_brat_d_hist_skeleton_is_sklearn_cloneable():
 
     assert cloned.learning_rate == 0.8
     assert cloned.dropout_rate == 0.2
+    assert cloned.subsample_rate == 0.7
     assert cloned.max_iter == 3
 
 
@@ -64,13 +66,17 @@ def test_brat_d_hist_fit_predict_smoke():
         "residual_tree_traversal_calls",
         "residual_cache_hit_rounds",
         "residual_zero_keep_rounds",
+        "sampled_training_rows",
     }
     assert set(diagnostics) == expected_keys
     assert diagnostics["total_seconds"] > 0
     assert diagnostics["residual_tree_prediction_calls"] >= 0
     assert diagnostics["residual_tree_traversal_calls"] == 0
     assert diagnostics["residual_zero_keep_rounds"] >= 0
+    assert diagnostics["sampled_training_rows"] == X.shape[0] * model.max_iter
     assert model._train_tree_predictions_.shape == (X.shape[0], model.max_iter)
+    assert model.in_bag_matrix_.shape == (X.shape[0], model.max_iter)
+    assert np.all(model.in_bag_matrix_)
 
 
 def test_brat_d_hist_caches_training_tree_predictions():
@@ -145,12 +151,14 @@ def test_brat_d_hist_rejects_unsupported_sklearn_modes():
         ({"loss": "absolute_error"}, "squared_error"),
         ({"learning_rate": 0.0}, "learning_rate"),
         ({"dropout_rate": 1.0}, "dropout_rate"),
+        ({"subsample_rate": 0.0}, "subsample_rate"),
         ({"warm_start": True}, "warm_start"),
         ({"categorical_features": [0]}, "categorical_features"),
         ({"monotonic_cst": [1]}, "monotonic_cst"),
         ({"interaction_cst": [{0}]}, "interaction_cst"),
         ({"max_iter": 0}, "max_iter"),
         ({"max_bins": 1}, "max_bins"),
+        ({"max_bins": 256}, "max_bins"),
     ],
 )
 def test_brat_d_hist_rejects_unsupported_parameters(params, message):
@@ -210,6 +218,35 @@ def test_brat_d_hist_predict_applies_signal_correction():
     expected = ((1 + model.learning_rate * q) / model.learning_rate) * raw_boulevard
 
     np.testing.assert_allclose(model.predict(X_eval), expected)
+
+
+def test_brat_d_hist_row_subsampling_is_deterministic():
+    X, y = make_regression(
+        n_samples=90,
+        n_features=2,
+        noise=0.5,
+        random_state=0,
+    )
+    params = dict(
+        max_iter=5,
+        learning_rate=0.7,
+        dropout_rate=0.2,
+        subsample_rate=0.6,
+        max_leaf_nodes=5,
+        min_samples_leaf=4,
+        max_bins=16,
+        random_state=0,
+    )
+
+    first = BRATDHistGradientBoostingRegressor(**params).fit(X, y)
+    second = BRATDHistGradientBoostingRegressor(**params).fit(X, y)
+
+    expected_rows_per_tree = int(np.ceil(params["subsample_rate"] * X.shape[0]))
+    np.testing.assert_array_equal(first.in_bag_matrix_, second.in_bag_matrix_)
+    assert np.all(first.in_bag_matrix_.sum(axis=0) == expected_rows_per_tree)
+    assert first.fit_diagnostics_["sampled_training_rows"] == (
+        expected_rows_per_tree * params["max_iter"]
+    )
 
 
 def test_brat_d_hist_cell_metadata_compresses_duplicate_bins():
@@ -274,6 +311,76 @@ def test_brat_d_hist_prepare_inference_uses_centered_residual_variance():
     residuals = y_calib - model.predict(X_calib)
     assert model.sigma_hat2_ == pytest.approx(float(np.var(residuals, ddof=1)))
     assert model.inference_method_ == "histogram_cell"
+
+
+def test_brat_d_hist_intervals_prepare_from_training_data_by_default():
+    X, y = make_regression(
+        n_samples=80,
+        n_features=2,
+        noise=1.0,
+        random_state=0,
+    )
+    X_train, X_test, y_train, _ = train_test_split(
+        X,
+        y,
+        test_size=0.25,
+        random_state=0,
+    )
+    model = BRATDHistGradientBoostingRegressor(
+        max_iter=5,
+        learning_rate=0.6,
+        dropout_rate=0.25,
+        max_leaf_nodes=4,
+        min_samples_leaf=5,
+        max_bins=16,
+        random_state=0,
+    ).fit(X_train, y_train)
+
+    ci_lower, ci_upper = model.confidence_interval(X_test[:4])
+
+    residuals = y_train - model.predict(X_train)
+    assert model.sigma_hat2_ == pytest.approx(float(np.var(residuals, ddof=1)))
+    assert model.inference_method_ == "histogram_cell"
+    assert ci_lower.shape == ci_upper.shape == (4,)
+    assert np.all(ci_lower <= ci_upper)
+
+
+def test_brat_d_hist_interval_call_can_use_calibration_data():
+    X, y = make_regression(
+        n_samples=90,
+        n_features=2,
+        noise=1.0,
+        random_state=0,
+    )
+    X_train, X_calib, y_train, y_calib = train_test_split(
+        X,
+        y,
+        test_size=0.25,
+        random_state=0,
+    )
+    model = BRATDHistGradientBoostingRegressor(
+        max_iter=5,
+        learning_rate=0.6,
+        dropout_rate=0.25,
+        max_leaf_nodes=4,
+        min_samples_leaf=5,
+        max_bins=16,
+        random_state=0,
+    ).fit(X_train, y_train)
+
+    pi_lower, pi_upper = model.prediction_interval(
+        X_calib[:4],
+        X_calib=X_calib,
+        y_calib=y_calib,
+    )
+
+    residuals = y_calib - model.predict(X_calib)
+    assert model.sigma_hat2_ == pytest.approx(float(np.var(residuals, ddof=1)))
+    assert pi_lower.shape == pi_upper.shape == (4,)
+    assert np.all(pi_lower <= pi_upper)
+
+    with pytest.raises(ValueError, match="provided together"):
+        model.confidence_interval(X_calib[:4], X_calib=X_calib)
 
 
 def test_brat_d_hist_cached_weight_norms_match_direct_solve_for_cells():
@@ -372,9 +479,6 @@ def test_brat_d_hist_observed_cell_inference_smoke():
         max_bins=16,
         random_state=0,
     ).fit(X_train, y_train)
-
-    with pytest.raises(RuntimeError, match="prepare_inference"):
-        model.confidence_interval(X_calib[:3])
 
     model.prepare_inference(X_calib, y_calib)
 
