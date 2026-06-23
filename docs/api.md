@@ -143,6 +143,51 @@ example:
 python examples/brat_histogram_api_demo.py --output /tmp/brat_histogram_api_demo.png
 ```
 
+### `IEBMRegressor`
+
+Experimental sklearn-style Inferable EBM training backend.
+
+```python
+import boulevard as bd
+
+model = bd.IEBMRegressor(
+    max_rounds=100,
+    max_bins=64,
+    learning_rate=1.0,
+    subsample_rate=0.8,
+    truncation=10.0,
+    max_leaves=2,
+    min_samples_leaf=10,
+    random_state=0,
+)
+model.fit(X_train, y_train)
+pred = model.predict(X_test)
+bins = model.apply_bins(X_test)
+```
+
+This class intentionally rebuilds the IEBM path inside boulevard instead of
+patching InterpretML private modules. The first version is deliberately narrow:
+
+- squared-error regression;
+- numeric features only;
+- main effects only;
+- one-dimensional binned tree updates;
+- sklearn-compatible `fit`, `predict`, `get_params`, and cloning behavior.
+
+Current limitations:
+
+- no confidence, prediction, or reproduction intervals yet;
+- no interactions;
+- no categorical feature handling;
+- no `sample_weight`;
+- no direct dependency on InterpretML internals yet.
+
+For a minimal fit/predict example:
+
+```bash
+python examples/iebm_quickstart.py
+```
+
 ### `XGBRegressor`
 
 Preliminary XGBoost wrapper scaffold. This should not yet be interpreted as a
