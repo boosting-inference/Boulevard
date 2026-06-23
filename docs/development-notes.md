@@ -64,21 +64,16 @@ median abs error vs true signal: 0.0560
 median 95% CI half-width: 0.1666
 ```
 
-The quickstart script is:
+The current API demo script is:
 
 ```bash
-python examples/bratp_quickstart.py
-```
-
-The visual diagnostic script is:
-
-```bash
-python examples/bratp_visual_check.py --output /tmp/bratp_visual_check.png
+python examples/brat_histogram_api_demo.py --output /tmp/brat_histogram_api_demo.png
 ```
 
 It plots the fitted signal, confidence and prediction bands, interval widths,
-BRAT-P weight norms, signal error against CI half-width, and calibration
-residuals.
+BRAT-D and BRAT-P weight norms, signal error against CI half-width, and
+calibration residuals. It also prints RMSE, coverage, interval-width quantiles,
+and wall-clock timings.
 
 Tests now include a regression check that compares the scaled BRAT-P cell system
 against the unscaled system and verifies that the norm changes by the expected
@@ -116,15 +111,14 @@ system is built in cell space with `cell_counts_` carrying training-row
 multiplicity. This gives the same norm as the direct cell solve for observed
 cells while avoiding repeated leaf traversal and linear solves for every query.
 
-The visual check script is:
+The current visual/API demo script is:
 
 ```bash
-python examples/brat_d_hist_visual_check.py
+python examples/brat_histogram_api_demo.py --output /tmp/brat_histogram_api_demo.png
 ```
 
-It compares the histogram BRAT-D estimator with the exact sample-space
-`BRATDRegressor` and vanilla sklearn `HistGradientBoostingRegressor`. It also
-prints diagnostics for:
+It compares the histogram BRAT-D estimator with BRAT-P and vanilla sklearn
+`HistGradientBoostingRegressor`. It also prints diagnostics for:
 
 - prediction RMSE against the known synthetic truth;
 - training, inference-preparation, prediction, and interval wall-clock time;
@@ -183,11 +177,11 @@ Important unresolved issues:
 
 The BRAT-D visual smoke script now checks more than interval plots. It also reports the variance estimate used by asymptotic intervals and plots where the confidence interval misses the known regression function in the synthetic example.
 
-The relevant example is:
+The current relevant example is:
 
 ```bash
 MPLBACKEND=Agg MPLCONFIGDIR=/tmp/boulevard_mplconfig \
-  .venv/bin/python examples/brat_d_visual_check.py --output /tmp/brat_d_visual_check.png
+  .venv/bin/python examples/brat_histogram_api_demo.py --output /tmp/brat_histogram_api_demo.png
 ```
 
 The diagnostic prints:

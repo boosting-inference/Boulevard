@@ -15,6 +15,7 @@ def test_brat_p_hist_skeleton_is_sklearn_cloneable():
         max_leaf_nodes=5,
         early_stopping=False,
         random_state=0,
+        n_jobs=2,
     )
 
     cloned = clone(model)
@@ -23,6 +24,7 @@ def test_brat_p_hist_skeleton_is_sklearn_cloneable():
     assert cloned.trees_per_round == 4
     assert cloned.subsample_rate == 0.7
     assert cloned.max_leaf_nodes == 5
+    assert cloned.n_jobs == 2
 
 
 def test_brat_p_hist_fit_predict_smoke():
@@ -110,31 +112,40 @@ def test_brat_p_hist_residual_formula():
     )
     np.testing.assert_allclose(dropped_first_round_residual, y)
 
+    round_residuals = model._residuals_for_round_binned(
+        y,
+        round_idx=2,
+        previous_slot_prediction_sums=slot_prediction_sums,
+    )
+    expected_round_residuals = np.vstack(
+        [
+            y - (slot_prediction_sums[1] + slot_prediction_sums[2]) / 2,
+            y - (slot_prediction_sums[0] + slot_prediction_sums[2]) / 2,
+            y - (slot_prediction_sums[0] + slot_prediction_sums[1]) / 2,
+        ]
+    )
+    np.testing.assert_allclose(round_residuals, expected_round_residuals)
+
 
 def test_brat_p_hist_fit_uses_frozen_previous_round_sums():
     class RecordingBRATP(BRATPHistGradientBoostingRegressor):
-        def _residuals_for_next_tree_binned(
+        def _residuals_for_round_binned(
             self,
             y,
             *,
             round_idx,
-            slot_idx,
             previous_slot_prediction_sums,
-            current_round_prediction_sum,
         ):
             self.recorded_previous_sums_.append(
                 (
                     round_idx,
-                    slot_idx,
                     previous_slot_prediction_sums.copy(),
                 )
             )
-            return super()._residuals_for_next_tree_binned(
+            return super()._residuals_for_round_binned(
                 y,
                 round_idx=round_idx,
-                slot_idx=slot_idx,
                 previous_slot_prediction_sums=previous_slot_prediction_sums,
-                current_round_prediction_sum=current_round_prediction_sum,
             )
 
     X, y = make_regression(
@@ -157,12 +168,11 @@ def test_brat_p_hist_fit_uses_frozen_previous_round_sums():
 
     second_round_snapshots = [
         previous_sums
-        for round_idx, _, previous_sums in model.recorded_previous_sums_
+        for round_idx, previous_sums in model.recorded_previous_sums_
         if round_idx == 1
     ]
-    assert len(second_round_snapshots) == model.trees_per_round
-    for snapshot in second_round_snapshots[1:]:
-        np.testing.assert_allclose(snapshot, second_round_snapshots[0])
+    assert len(second_round_snapshots) == 1
+    assert np.any(second_round_snapshots[0])
 
 
 def test_brat_p_hist_prediction_uses_round_slot_aggregation():
@@ -213,6 +223,59 @@ def test_brat_p_hist_is_deterministic():
     np.testing.assert_allclose(first, second)
 
 
+def test_brat_p_hist_parallel_fit_matches_serial_fit():
+    X, y = make_regression(
+        n_samples=90,
+        n_features=3,
+        noise=1.0,
+        random_state=0,
+    )
+    params = dict(
+        n_rounds=4,
+        trees_per_round=3,
+        subsample_rate=0.8,
+        max_leaf_nodes=5,
+        min_samples_leaf=5,
+        max_bins=16,
+        random_state=0,
+        drop_first_round=True,
+    )
+
+    serial = BRATPHistGradientBoostingRegressor(**params, n_jobs=1).fit(X, y)
+    parallel = BRATPHistGradientBoostingRegressor(**params, n_jobs=2).fit(X, y)
+
+    np.testing.assert_allclose(serial.predict(X), parallel.predict(X))
+    np.testing.assert_array_equal(serial.in_bag_matrix_, parallel.in_bag_matrix_)
+    assert serial.fit_diagnostics_["parallel_rounds"] == 0
+    assert parallel.fit_diagnostics_["parallel_rounds"] == parallel.n_rounds
+    assert parallel.fit_diagnostics_["effective_n_jobs"] == 2
+    assert serial.fit_diagnostics_["vectorized_residual_rounds"] == serial.n_rounds
+    assert parallel.fit_diagnostics_["vectorized_residual_rounds"] == parallel.n_rounds
+
+
+def test_brat_p_hist_default_first_round_stays_serial_with_parallel_jobs():
+    X, y = make_regression(
+        n_samples=90,
+        n_features=3,
+        noise=1.0,
+        random_state=0,
+    )
+    model = BRATPHistGradientBoostingRegressor(
+        n_rounds=4,
+        trees_per_round=3,
+        subsample_rate=0.8,
+        max_leaf_nodes=5,
+        min_samples_leaf=5,
+        max_bins=16,
+        random_state=0,
+        n_jobs=2,
+    ).fit(X, y)
+
+    assert model.fit_diagnostics_["serial_rounds"] == 1
+    assert model.fit_diagnostics_["parallel_rounds"] == model.n_rounds - 1
+    assert model.fit_diagnostics_["vectorized_residual_rounds"] == model.n_rounds - 1
+
+
 @pytest.mark.parametrize(
     ("params", "message"),
     [
@@ -226,6 +289,9 @@ def test_brat_p_hist_is_deterministic():
         ({"interaction_cst": [{0}]}, "interaction_cst"),
         ({"max_bins": 1}, "max_bins"),
         ({"max_bins": 256}, "max_bins"),
+        ({"n_jobs": 0}, "n_jobs"),
+        ({"n_jobs": 1.5}, "n_jobs"),
+        ({"n_jobs": True}, "n_jobs"),
     ],
 )
 def test_brat_p_hist_rejects_unsupported_parameters(params, message):

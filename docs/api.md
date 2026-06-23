@@ -74,6 +74,16 @@ model.prepare_inference(X_calib, y_calib)
 lower, upper = model.confidence_interval(X_test)
 ```
 
+For a combined BRAT-D / BRAT-P plotted API example with a vanilla histogram
+gradient boosting baseline:
+
+```bash
+python examples/brat_histogram_api_demo.py --output /tmp/brat_histogram_api_demo.png
+```
+
+To benchmark optional BRAT-P within-round parallel fitting, pass for example
+`--bratp-n-jobs 2`.
+
 The estimator also exposes `fit_diagnostics_` after fitting. This is intended for
 research diagnostics and currently reports timing for binning, BRAT-D residual
 construction, tree fitting, training-prediction caching, and interval-related
@@ -91,6 +101,7 @@ model = bd.BRATPHistGradientBoostingRegressor(
     n_rounds=100,
     trees_per_round=5,
     subsample_rate=0.8,
+    n_jobs=2,
     max_depth=10,
     max_leaf_nodes=1024,
     min_samples_leaf=5,
@@ -102,24 +113,21 @@ model.fit(X_train, y_train)
 pred = model.predict(X_test)
 ```
 
-This first implementation trains the BRAT-P round/slot structure serially. It
-uses deterministic slot dropping in the residual construction and exposes the
-same observed histogram-cell interval interface as the BRAT-D histogram
-estimator. The BRAT-P interval weights use the parallel KRR system
-`K^{-1} I + ((K - 1) / K) K_n`, where `K = trees_per_round`.
-
-The quickstart script prints RMSE, CI/PI coverage, interval widths, timing, and
-sample prediction intervals:
-
-```bash
-python examples/bratp_quickstart.py
-```
+This estimator uses deterministic slot dropping in the residual construction
+and exposes the same observed histogram-cell interval interface as the BRAT-D
+histogram estimator. BRAT-P can fit slot trees within each completed-history
+round in parallel with `n_jobs`; the default first round remains serial unless
+`drop_first_round=True`, because the default first round is a sequential warm
+start. The BRAT-P interval weights use the parallel KRR system `K^{-1} I + ((K -
+1) / K) K_n`, where `K = trees_per_round`.
 
 For a plotted diagnostic of the fitted signal, confidence and prediction bands,
-weight norms, interval widths, and calibration residuals:
+weight norms, interval widths, calibration residuals, RMSE, coverage, interval
+width quantiles, and wall-clock timings, use the combined BRAT-D / BRAT-P API
+example:
 
 ```bash
-python examples/bratp_visual_check.py --output /tmp/bratp_visual_check.png
+python examples/brat_histogram_api_demo.py --output /tmp/brat_histogram_api_demo.png
 ```
 
 ### `BRATDRegressor`

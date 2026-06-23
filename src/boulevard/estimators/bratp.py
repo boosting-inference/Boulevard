@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import inspect
 import time
+from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
+from joblib import Parallel, delayed
 from sklearn.ensemble import HistGradientBoostingRegressor
 from sklearn.utils.validation import check_array, check_is_fitted, check_X_y
 
@@ -25,6 +27,21 @@ except ImportError as exc:  # pragma: no cover - import-time compatibility guard
     TreePredictor = None
 else:
     _HISTOGRAM_IMPORT_ERROR = None
+
+
+@dataclass
+class _SlotFitResult:
+    slot_idx: int
+    tree_idx: int
+    predictor: TreePredictor
+    train_prediction: np.ndarray
+    in_bag: np.ndarray
+    residual_seconds: float
+    gradient_seconds: float
+    grower_setup_seconds: float
+    grower_grow_seconds: float
+    predictor_seconds: float
+    training_prediction_cache_seconds: float
 
 
 class BRATPHistGradientBoostingRegressor(HistGradientBoostingRegressor):
@@ -60,6 +77,7 @@ class BRATPHistGradientBoostingRegressor(HistGradientBoostingRegressor):
         verbose: int = 0,
         random_state: int | None = None,
         drop_first_round: bool = False,
+        n_jobs: int | None = None,
     ) -> None:
         super().__init__(
             loss=loss,
@@ -87,6 +105,7 @@ class BRATPHistGradientBoostingRegressor(HistGradientBoostingRegressor):
         self.trees_per_round = trees_per_round
         self.subsample_rate = subsample_rate
         self.drop_first_round = drop_first_round
+        self.n_jobs = n_jobs
 
     def fit(
         self,
@@ -106,6 +125,9 @@ class BRATPHistGradientBoostingRegressor(HistGradientBoostingRegressor):
         training_prediction_cache_seconds = 0.0
         score_seconds = 0.0
         sampled_training_rows = 0
+        parallel_rounds = 0
+        serial_rounds = 0
+        vectorized_residual_rounds = 0
 
         self._check_histogram_backend()
         self._validate_brat_p_params()
@@ -171,80 +193,108 @@ class BRATPHistGradientBoostingRegressor(HistGradientBoostingRegressor):
             dtype=float,
         )
         current_round_prediction_sum = np.zeros(X_binned.shape[0], dtype=float)
+        tree_seeds = rng.integers(
+            0,
+            np.iinfo(np.int32).max,
+            size=total_trees,
+            dtype=np.int64,
+        )
+        n_jobs = self._effective_n_jobs()
 
         for round_idx in range(self.n_rounds):
             current_round_prediction_sum.fill(0.0)
             previous_slot_prediction_sums = slot_prediction_sums.copy()
-            for slot_idx in range(self.trees_per_round):
-                tree_idx = round_idx * self.trees_per_round + slot_idx
+            step_start = time.perf_counter()
+            round_residuals = self._residuals_for_round_binned(
+                y,
+                round_idx=round_idx,
+                previous_slot_prediction_sums=previous_slot_prediction_sums,
+            )
+            residual_seconds += time.perf_counter() - step_start
+            if round_residuals is not None:
+                vectorized_residual_rounds += 1
 
-                step_start = time.perf_counter()
-                residuals = self._residuals_for_next_tree_binned(
-                    y,
-                    round_idx=round_idx,
-                    slot_idx=slot_idx,
-                    previous_slot_prediction_sums=previous_slot_prediction_sums,
-                    current_round_prediction_sum=current_round_prediction_sum,
-                )
-                residual_seconds += time.perf_counter() - step_start
-
-                in_bag = self._sample_in_bag_indices(X_binned.shape[0], rng)
-                self.in_bag_matrix_[in_bag, tree_idx] = True
-                sampled_training_rows += int(in_bag.size)
-
-                step_start = time.perf_counter()
-                gradients = np.ascontiguousarray(
-                    -residuals[in_bag],
-                    dtype=G_H_DTYPE,
-                )
-                if sample_weight is None:
-                    hessians = np.ones(1, dtype=G_H_DTYPE)
-                else:
-                    gradients = np.ascontiguousarray(
-                        gradients * sample_weight[in_bag],
-                        dtype=G_H_DTYPE,
+            can_fit_round_in_parallel = (
+                n_jobs != 1 and (round_idx > 0 or self.drop_first_round)
+            )
+            if can_fit_round_in_parallel:
+                parallel_rounds += 1
+                round_results = Parallel(n_jobs=n_jobs, prefer="threads")(
+                    delayed(self._fit_brat_p_slot_binned)(
+                        X_binned=X_binned,
+                        residuals=round_residuals[slot_idx],
+                        sample_weight=sample_weight,
+                        round_idx=round_idx,
+                        slot_idx=slot_idx,
+                        n_bins=n_bins,
+                        has_missing_values=has_missing_values,
+                        tree_seed=int(
+                            tree_seeds[
+                                round_idx * self.trees_per_round + slot_idx
+                            ]
+                        ),
+                        n_threads=n_threads,
                     )
-                    hessians = np.ascontiguousarray(
-                        sample_weight[in_bag],
-                        dtype=G_H_DTYPE,
+                    for slot_idx in range(self.trees_per_round)
+                )
+            else:
+                serial_rounds += 1
+                round_results = []
+                for slot_idx in range(self.trees_per_round):
+                    if round_residuals is None:
+                        step_start = time.perf_counter()
+                        residuals = self._residuals_for_next_tree_binned(
+                            y,
+                            round_idx=round_idx,
+                            slot_idx=slot_idx,
+                            previous_slot_prediction_sums=(
+                                previous_slot_prediction_sums
+                            ),
+                            current_round_prediction_sum=current_round_prediction_sum,
+                        )
+                        residual_seconds += time.perf_counter() - step_start
+                    else:
+                        residuals = round_residuals[slot_idx]
+
+                    result = self._fit_brat_p_slot_binned(
+                        X_binned=X_binned,
+                        residuals=residuals,
+                        sample_weight=sample_weight,
+                        round_idx=round_idx,
+                        slot_idx=slot_idx,
+                        n_bins=n_bins,
+                        has_missing_values=has_missing_values,
+                        tree_seed=int(
+                            tree_seeds[
+                                round_idx * self.trees_per_round + slot_idx
+                            ]
+                        ),
+                        n_threads=n_threads,
                     )
-                gradient_seconds += time.perf_counter() - step_start
+                    round_results.append(result)
+                    current_round_prediction_sum += result.train_prediction
 
-                step_start = time.perf_counter()
-                grower = self._make_tree_grower(
-                    X_binned=np.asfortranarray(X_binned[in_bag]),
-                    gradients=gradients,
-                    hessians=hessians,
-                    n_bins=n_bins,
-                    has_missing_values=has_missing_values,
-                    rng=rng,
-                    n_threads=n_threads,
+            for result in sorted(round_results, key=lambda item: item.slot_idx):
+                self.in_bag_matrix_[result.in_bag, result.tree_idx] = True
+                sampled_training_rows += int(result.in_bag.size)
+                residual_seconds += result.residual_seconds
+                gradient_seconds += result.gradient_seconds
+                grower_setup_seconds += result.grower_setup_seconds
+                grower_grow_seconds += result.grower_grow_seconds
+                predictor_seconds += result.predictor_seconds
+                training_prediction_cache_seconds += (
+                    result.training_prediction_cache_seconds
                 )
-                grower_setup_seconds += time.perf_counter() - step_start
 
-                step_start = time.perf_counter()
-                grower.grow()
-                grower_grow_seconds += time.perf_counter() - step_start
-
-                step_start = time.perf_counter()
-                predictor = grower.make_predictor(
-                    binning_thresholds=self._bin_mapper.bin_thresholds_
+                self._predictors.append([result.predictor])
+                self._predictor_table[round_idx][result.slot_idx] = result.predictor
+                self._train_tree_predictions_[:, result.tree_idx] = (
+                    result.train_prediction
                 )
-                predictor_seconds += time.perf_counter() - step_start
-                self._predictors.append([predictor])
-                self._predictor_table[round_idx][slot_idx] = predictor
-
-                step_start = time.perf_counter()
-                train_prediction = predictor.predict_binned(
-                    X_binned,
-                    self._bin_mapper.missing_values_bin_idx_,
-                    n_threads,
+                self._train_prediction_table_[round_idx, result.slot_idx] = (
+                    result.train_prediction
                 )
-                self._train_tree_predictions_[:, tree_idx] = train_prediction
-                self._train_prediction_table_[round_idx, slot_idx] = train_prediction
-                slot_prediction_sums[slot_idx] += train_prediction
-                current_round_prediction_sum += train_prediction
-                training_prediction_cache_seconds += time.perf_counter() - step_start
+                slot_prediction_sums[result.slot_idx] += result.train_prediction
 
                 if self.verbose:
                     step_start = time.perf_counter()
@@ -270,6 +320,11 @@ class BRATPHistGradientBoostingRegressor(HistGradientBoostingRegressor):
             "trees_per_round": self.trees_per_round,
             "total_trees": total_trees,
             "drop_first_round": self.drop_first_round,
+            "n_jobs": self.n_jobs,
+            "effective_n_jobs": n_jobs,
+            "parallel_rounds": parallel_rounds,
+            "serial_rounds": serial_rounds,
+            "vectorized_residual_rounds": vectorized_residual_rounds,
             "sampled_training_rows": sampled_training_rows,
         }
         return self
@@ -456,9 +511,18 @@ class BRATPHistGradientBoostingRegressor(HistGradientBoostingRegressor):
             raise ValueError("max_bins must be at least 2.")
         if self.max_bins > 255:
             raise ValueError("max_bins cannot exceed 255 for sklearn histogram trees.")
+        if self.n_jobs is not None and (
+            isinstance(self.n_jobs, bool) or not isinstance(self.n_jobs, int)
+        ):
+            raise ValueError("n_jobs must be an integer or None.")
+        if self.n_jobs == 0:
+            raise ValueError("n_jobs cannot be 0.")
 
     def _effective_n_threads(self) -> int:
         return 1
+
+    def _effective_n_jobs(self) -> int:
+        return 1 if self.n_jobs is None else self.n_jobs
 
     def _sample_in_bag_indices(
         self,
@@ -522,6 +586,106 @@ class BRATPHistGradientBoostingRegressor(HistGradientBoostingRegressor):
         if "rng" in signature.parameters:
             kwargs["rng"] = rng
         return TreeGrower(**kwargs)
+
+    def _fit_brat_p_slot_binned(
+        self,
+        *,
+        X_binned: np.ndarray,
+        residuals: np.ndarray,
+        sample_weight: np.ndarray | None,
+        round_idx: int,
+        slot_idx: int,
+        n_bins: int,
+        has_missing_values: np.ndarray,
+        tree_seed: int,
+        n_threads: int,
+    ) -> _SlotFitResult:
+        tree_idx = round_idx * self.trees_per_round + slot_idx
+        rng = np.random.default_rng(tree_seed)
+
+        in_bag = self._sample_in_bag_indices(X_binned.shape[0], rng)
+
+        step_start = time.perf_counter()
+        gradients = np.ascontiguousarray(
+            -residuals[in_bag],
+            dtype=G_H_DTYPE,
+        )
+        if sample_weight is None:
+            hessians = np.ones(1, dtype=G_H_DTYPE)
+        else:
+            gradients = np.ascontiguousarray(
+                gradients * sample_weight[in_bag],
+                dtype=G_H_DTYPE,
+            )
+            hessians = np.ascontiguousarray(
+                sample_weight[in_bag],
+                dtype=G_H_DTYPE,
+            )
+        gradient_seconds = time.perf_counter() - step_start
+
+        step_start = time.perf_counter()
+        grower = self._make_tree_grower(
+            X_binned=np.asfortranarray(X_binned[in_bag]),
+            gradients=gradients,
+            hessians=hessians,
+            n_bins=n_bins,
+            has_missing_values=has_missing_values,
+            rng=rng,
+            n_threads=n_threads,
+        )
+        grower_setup_seconds = time.perf_counter() - step_start
+
+        step_start = time.perf_counter()
+        grower.grow()
+        grower_grow_seconds = time.perf_counter() - step_start
+
+        step_start = time.perf_counter()
+        predictor = grower.make_predictor(
+            binning_thresholds=self._bin_mapper.bin_thresholds_
+        )
+        predictor_seconds = time.perf_counter() - step_start
+
+        step_start = time.perf_counter()
+        train_prediction = predictor.predict_binned(
+            X_binned,
+            self._bin_mapper.missing_values_bin_idx_,
+            n_threads,
+        )
+        training_prediction_cache_seconds = time.perf_counter() - step_start
+
+        return _SlotFitResult(
+            slot_idx=slot_idx,
+            tree_idx=tree_idx,
+            predictor=predictor,
+            train_prediction=train_prediction,
+            in_bag=in_bag,
+            residual_seconds=0.0,
+            gradient_seconds=gradient_seconds,
+            grower_setup_seconds=grower_setup_seconds,
+            grower_grow_seconds=grower_grow_seconds,
+            predictor_seconds=predictor_seconds,
+            training_prediction_cache_seconds=training_prediction_cache_seconds,
+        )
+
+    def _residuals_for_round_binned(
+        self,
+        y: np.ndarray,
+        *,
+        round_idx: int,
+        previous_slot_prediction_sums: np.ndarray,
+    ) -> np.ndarray | None:
+        if round_idx == 0 and not self.drop_first_round:
+            return None
+
+        if round_idx == 0:
+            return np.broadcast_to(
+                y,
+                (self.trees_per_round, y.shape[0]),
+            )
+
+        previous_slot_averages = previous_slot_prediction_sums / round_idx
+        total_previous = previous_slot_averages.sum(axis=0)
+        return y[None, :] - total_previous[None, :] + previous_slot_averages
 
     def _residuals_for_next_tree_binned(
         self,
