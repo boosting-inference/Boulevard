@@ -1,5 +1,45 @@
 # Development Notes
 
+## 2026-06-23: Nyström sketching for histogram inference
+
+BRAT-D and BRAT-P histogram estimators now support optional Nyström sketching
+for interval weight norms:
+
+```python
+model = bd.BRATDHistGradientBoostingRegressor(
+    nystrom_subsample_rate=1.0,
+)
+```
+
+This is an inference-only approximation. It does not change the fitted
+BRAT-D/BRAT-P tree ensemble or the prediction function. It only replaces the
+full observed-cell kernel solve used for `weight_norms`, confidence intervals,
+prediction intervals, and reproduction intervals.
+
+The paper sketches the full row-level kernel with a subsampling matrix `S`. The
+histogram implementation has already compressed repeated binned rows into
+observed multidimensional cells, so the implementation samples landmark cells
+with probability proportional to `cell_counts_`. This preserves the intended
+row-subsampling interpretation while avoiding duplicate landmark columns from
+identical binned rows.
+
+The default remains exact through the all-landmark path:
+
+```python
+nystrom_subsample_rate=1.0
+```
+
+If the requested sketch would include all observed cells, the code falls back to
+the exact observed-cell solve and reports `inference_method_ = "histogram_cell"`.
+Otherwise it reports `inference_method_ = "histogram_cell_nystrom"` and stores
+`nystrom_landmark_count_`.
+
+The API demo relies on this estimator default:
+
+```bash
+python examples/brat_histogram_api_demo.py --output /tmp/brat_histogram_api_demo.png
+```
+
 ## 2026-06-23: Backend-oriented estimator layout
 
 The estimator package is now organized by backend family. Sklearn-backed
@@ -27,8 +67,9 @@ BRAT-D and BRAT-P variants.
 
 Early scaffolding modules that were not used by the current estimators were
 removed: `boulevard.algorithms`, `boulevard.core`, empty `boulevard.inspection`,
-and the unused Nyström helper. Active shared code now lives in the places that
-current estimators actually import from, mainly `backends` and `intervals`.
+and the unused early Nyström helper. Active shared code now lives in the places
+that current estimators actually import from, mainly `backends`, `intervals`,
+and `estimators.sklearn`.
 
 The exact sample-space `BRATDRegressor` prototype was later removed from the
 public package surface. The histogram BRAT-D estimator is now the sklearn-backed

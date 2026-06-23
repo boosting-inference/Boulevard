@@ -191,6 +191,7 @@ def main() -> None:
         learning_rate=0.45,
         dropout_rate=0.3,
         subsample_rate=0.8,
+        nystrom_subsample_rate=0.8,
         max_depth=10,
         max_leaf_nodes=512,
         min_samples_leaf=5,
@@ -202,6 +203,7 @@ def main() -> None:
         n_rounds=100,
         trees_per_round=total_tree_budget // 100,
         subsample_rate=0.8,
+        nystrom_subsample_rate=0.8,
         max_depth=10,
         max_leaf_nodes=256,
         min_samples_leaf=5,
@@ -406,6 +408,7 @@ def main() -> None:
         f"{X_train.shape[0]}/{X_calib.shape[0]}/{X_test.shape[0]}"
     )
     print(f"total tree budget per method: {total_tree_budget}")
+    print(f"Nyström inference subsample rate: {brat_d.nystrom_subsample_rate}")
     print("")
     print("vanilla HGBR")
     print(f"vanilla HGBR fit seconds: {hgb_fit_seconds:.4f}")
@@ -468,6 +471,13 @@ def main() -> None:
         print(f"  test 95% CI coverage vs signal: {test_ci_coverage:.3f}")
         print(f"  test 95% PI coverage vs y: {test_pi_coverage:.3f}")
         print(f"  sigma_hat2: {result.model.sigma_hat2_:.6f}")
+        print(f"  inference method: {result.model.inference_method_}")
+        if hasattr(result.model, "nystrom_landmark_count_"):
+            print(
+                "  Nyström landmarks / observed cells: "
+                f"{result.model.nystrom_landmark_count_}/"
+                f"{result.model.observed_cells_.shape[0]}"
+            )
         if "parallel_rounds" in result.model.fit_diagnostics_:
             print(
                 "  parallel/serial rounds: "

@@ -10,6 +10,11 @@ import numpy as np
 from sklearn.ensemble import HistGradientBoostingRegressor
 from sklearn.utils.validation import check_array, check_is_fitted, check_X_y
 
+from boulevard.estimators.sklearn._nystrom import (
+    nystrom_weight_norm_cache,
+    nystrom_weight_norms,
+    sample_nystrom_landmarks,
+)
 from boulevard.intervals.asymptotic import normal_interval, normal_quantile
 
 try:
@@ -62,6 +67,7 @@ class BRATDHistGradientBoostingRegressor(HistGradientBoostingRegressor):
         tol: float = 1e-7,
         verbose: int = 0,
         random_state: int | None = None,
+        nystrom_subsample_rate: float | None = 1.0,
     ) -> None:
         super().__init__(
             loss=loss,
@@ -87,6 +93,7 @@ class BRATDHistGradientBoostingRegressor(HistGradientBoostingRegressor):
         )
         self.dropout_rate = dropout_rate
         self.subsample_rate = subsample_rate
+        self.nystrom_subsample_rate = nystrom_subsample_rate
 
     def fit(
         self,
@@ -324,7 +331,6 @@ class BRATDHistGradientBoostingRegressor(HistGradientBoostingRegressor):
         self.y_inference_calib_ = y_var.copy()
         self.sigma_hat2_ = float(np.var(residuals, ddof=1))
         self._prepare_cell_kernel()
-        self.inference_method_ = "histogram_cell"
         return self
 
     def predict_interval(
@@ -447,6 +453,9 @@ class BRATDHistGradientBoostingRegressor(HistGradientBoostingRegressor):
             raise ValueError("max_bins must be at least 2.")
         if self.max_bins > 255:
             raise ValueError("max_bins cannot exceed 255 for sklearn histogram trees.")
+        if self.nystrom_subsample_rate is not None:
+            if not 0 < self.nystrom_subsample_rate <= 1:
+                raise ValueError("nystrom_subsample_rate must be in (0, 1].")
 
     def _effective_n_threads(self) -> int:
         return 1
@@ -612,6 +621,27 @@ class BRATDHistGradientBoostingRegressor(HistGradientBoostingRegressor):
         self._prepare_observed_cell_norm_cache()
 
     def _prepare_observed_cell_norm_cache(self) -> None:
+        for attr in (
+            "nystrom_landmark_indices_",
+            "nystrom_sigma_matrix_",
+            "nystrom_landmark_count_",
+        ):
+            if hasattr(self, attr):
+                delattr(self, attr)
+
+        if self.nystrom_subsample_rate is not None:
+            landmark_indices = sample_nystrom_landmarks(
+                cell_counts=self.cell_counts_,
+                subsample_rate=self.nystrom_subsample_rate,
+                random_state=self.random_state,
+            )
+            self.nystrom_landmark_indices_ = landmark_indices
+            self.nystrom_landmark_count_ = int(landmark_indices.size)
+            if landmark_indices.size < self.cell_kernel_matrix_.shape[0]:
+                self._prepare_nystrom_cell_norm_cache(landmark_indices)
+                self.inference_method_ = "histogram_cell_nystrom"
+                return
+
         q = 1 - self.dropout_rate
         weighted_kernel = self.cell_counts_[:, None] * self.cell_kernel_matrix_
         matrix = (1 / self.learning_rate) * np.eye(self.cell_kernel_matrix_.shape[0])
@@ -622,6 +652,19 @@ class BRATDHistGradientBoostingRegressor(HistGradientBoostingRegressor):
         ).T
         self.cell_weight_norms_ = np.sqrt(
             np.maximum((weights**2) @ self.cell_counts_, 0.0)
+        )
+        self.inference_method_ = "histogram_cell"
+
+    def _prepare_nystrom_cell_norm_cache(self, landmark_indices: np.ndarray) -> None:
+        q = 1 - self.dropout_rate
+        self.cell_weight_norms_, self.nystrom_sigma_matrix_ = (
+            nystrom_weight_norm_cache(
+                kernel_matrix=self.cell_kernel_matrix_,
+                cell_counts=self.cell_counts_,
+                landmark_indices=landmark_indices,
+                identity_scale=1 / self.learning_rate,
+                kernel_scale=q,
+            )
         )
 
     @staticmethod
@@ -651,7 +694,11 @@ class BRATDHistGradientBoostingRegressor(HistGradientBoostingRegressor):
                 kernel[np.ix_(members, members)] += 1.0 / denom
         return kernel / n_trees
 
-    def _cell_kernel_vector(self, test_leaf_indices: np.ndarray) -> np.ndarray:
+    def _cell_kernel_vector(
+        self,
+        test_leaf_indices: np.ndarray,
+        reference_cell_indices: np.ndarray | None = None,
+    ) -> np.ndarray:
         train_leaves = self.cell_leaf_assignments_
         test_leaves = np.asarray(test_leaf_indices)
         counts = self.cell_counts_
@@ -663,15 +710,28 @@ class BRATDHistGradientBoostingRegressor(HistGradientBoostingRegressor):
                 "train and test leaf indices must have the same number of trees."
             )
 
+        if reference_cell_indices is None:
+            reference_indices = np.arange(train_leaves.shape[0])
+        else:
+            reference_indices = np.asarray(reference_cell_indices, dtype=int)
+            if reference_indices.ndim != 1:
+                raise ValueError("reference_cell_indices must be one-dimensional.")
+            if np.any(reference_indices < 0) or np.any(
+                reference_indices >= train_leaves.shape[0]
+            ):
+                raise ValueError("reference_cell_indices contain out-of-range cells.")
+
         n_test, n_trees = test_leaves.shape
-        out = np.zeros((n_test, train_leaves.shape[0]), dtype=float)
+        out = np.zeros((n_test, reference_indices.shape[0]), dtype=float)
         for tree_idx in range(n_trees):
             train_tree_leaves = train_leaves[:, tree_idx]
+            reference_tree_leaves = train_tree_leaves[reference_indices]
             for row_idx in range(n_test):
-                members = train_tree_leaves == test_leaves[row_idx, tree_idx]
+                leaf = test_leaves[row_idx, tree_idx]
+                members = train_tree_leaves == leaf
                 denom = float(np.sum(counts[members]))
                 if denom > 0:
-                    out[row_idx, members] += 1.0 / denom
+                    out[row_idx, reference_tree_leaves == leaf] += 1.0 / denom
         return out / n_trees
 
     def _solve_cell_brat_d_weights(self, kernel_vectors: np.ndarray) -> np.ndarray:
@@ -693,6 +753,29 @@ class BRATDHistGradientBoostingRegressor(HistGradientBoostingRegressor):
             [self._cell_to_index_.get(tuple(row.tolist()), -1) for row in X_binned],
             dtype=int,
         )
+
+        if hasattr(self, "nystrom_sigma_matrix_"):
+            landmark_indices = self.nystrom_landmark_indices_
+            landmark_vectors = np.empty(
+                (X_binned.shape[0], landmark_indices.shape[0]),
+                dtype=float,
+            )
+            observed = cell_indices >= 0
+            if np.any(observed):
+                landmark_vectors[observed] = self.cell_kernel_matrix_[
+                    np.ix_(cell_indices[observed], landmark_indices)
+                ]
+            if np.any(~observed):
+                unseen_binned = X_binned[~observed]
+                test_leaf_indices = self._apply_leaf_indices_binned(unseen_binned)
+                landmark_vectors[~observed] = self._cell_kernel_vector(
+                    test_leaf_indices,
+                    reference_cell_indices=landmark_indices,
+                )
+            return nystrom_weight_norms(
+                landmark_vectors,
+                self.nystrom_sigma_matrix_,
+            )
 
         norms = np.empty(X_binned.shape[0], dtype=float)
         observed = cell_indices >= 0

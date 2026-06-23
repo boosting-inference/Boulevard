@@ -21,6 +21,7 @@ model = bd.BRATDHistGradientBoostingRegressor(
     max_bins=255,
     early_stopping=False,
     random_state=0,
+    nystrom_subsample_rate=1.0,
 )
 model.fit(X_train, y_train)
 pred = model.predict(X_test)
@@ -37,7 +38,9 @@ Supported scope:
 - continuous features;
 - row subsampling through `subsample_rate`;
 - asymptotic BRAT-D confidence, prediction, and reproduction intervals;
-- observed histogram-cell inference with cached cell weight norms.
+- observed histogram-cell inference with cached cell weight norms;
+- optional Nyström sketching for interval weight norms through
+  `nystrom_subsample_rate`.
 
 Current limitations:
 
@@ -84,6 +87,11 @@ python examples/brat_histogram_api_demo.py --output /tmp/brat_histogram_api_demo
 To benchmark optional BRAT-P within-round parallel fitting, pass for example
 `--bratp-n-jobs 2`.
 
+The estimator defaults to `nystrom_subsample_rate=1.0`. In the current
+histogram-cell implementation, this selects all observed cells as landmarks and
+falls back to the stable exact observed-cell solve. Smaller values can be used
+for sketched interval inference experiments.
+
 The estimator also exposes `fit_diagnostics_` after fitting. This is intended for
 research diagnostics and currently reports timing for binning, BRAT-D residual
 construction, tree fitting, training-prediction caching, and interval-related
@@ -108,6 +116,7 @@ model = bd.BRATPHistGradientBoostingRegressor(
     max_bins=255,
     early_stopping=False,
     random_state=0,
+    nystrom_subsample_rate=1.0,
 )
 model.fit(X_train, y_train)
 pred = model.predict(X_test)
@@ -120,6 +129,10 @@ round in parallel with `n_jobs`; the default first round remains serial unless
 `drop_first_round=True`, because the default first round is a sequential warm
 start. The BRAT-P interval weights use the parallel KRR system `K^{-1} I + ((K -
 1) / K) K_n`, where `K = trees_per_round`.
+
+Like the BRAT-D histogram estimator, BRAT-P supports optional Nyström sketching
+for interval weight norms through `nystrom_subsample_rate`. The default `1.0`
+selects all observed cells and falls back to the exact observed-cell solve.
 
 For a plotted diagnostic of the fitted signal, confidence and prediction bands,
 weight norms, interval widths, calibration residuals, RMSE, coverage, interval
