@@ -174,6 +174,7 @@ class BRATPHistGradientBoostingRegressor(HistGradientBoostingRegressor):
 
         for round_idx in range(self.n_rounds):
             current_round_prediction_sum.fill(0.0)
+            previous_slot_prediction_sums = slot_prediction_sums.copy()
             for slot_idx in range(self.trees_per_round):
                 tree_idx = round_idx * self.trees_per_round + slot_idx
 
@@ -182,7 +183,7 @@ class BRATPHistGradientBoostingRegressor(HistGradientBoostingRegressor):
                     y,
                     round_idx=round_idx,
                     slot_idx=slot_idx,
-                    slot_prediction_sums=slot_prediction_sums,
+                    previous_slot_prediction_sums=previous_slot_prediction_sums,
                     current_round_prediction_sum=current_round_prediction_sum,
                 )
                 residual_seconds += time.perf_counter() - step_start
@@ -528,7 +529,7 @@ class BRATPHistGradientBoostingRegressor(HistGradientBoostingRegressor):
         *,
         round_idx: int,
         slot_idx: int,
-        slot_prediction_sums: np.ndarray,
+        previous_slot_prediction_sums: np.ndarray,
         current_round_prediction_sum: np.ndarray,
     ) -> np.ndarray:
         if round_idx == 0 and self.drop_first_round:
@@ -537,7 +538,7 @@ class BRATPHistGradientBoostingRegressor(HistGradientBoostingRegressor):
         if round_idx == 0:
             return y - current_round_prediction_sum
 
-        previous_slot_averages = slot_prediction_sums / round_idx
+        previous_slot_averages = previous_slot_prediction_sums / round_idx
         dropped_prediction = (
             previous_slot_averages.sum(axis=0) - previous_slot_averages[slot_idx]
         )

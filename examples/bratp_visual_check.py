@@ -40,7 +40,7 @@ def main() -> None:
     args = parser.parse_args()
 
     rng = np.random.default_rng(0)
-    noise_std = 0.25
+    noise_std = 1.0
     X = np.linspace(0.0, 1.0, 3000).reshape(-1, 1)
     x = X[:, 0]
     truth = np.sin(2 * np.pi * x) + 0.35 * np.sin(6 * np.pi * x)
@@ -62,13 +62,13 @@ def main() -> None:
     truth_test = truth[test_idx]
 
     model = bd.BRATPHistGradientBoostingRegressor(
-        n_rounds=60,
-        trees_per_round=4,
+        n_rounds=200,
+        trees_per_round=2,
         subsample_rate=0.8,
         max_depth=10,
         max_leaf_nodes=256,
         min_samples_leaf=5,
-        max_bins=127,
+        max_bins=63,
         early_stopping=False,
         random_state=0,
     )
@@ -80,7 +80,7 @@ def main() -> None:
         max_depth=model.max_depth,
         max_leaf_nodes=model.max_leaf_nodes,
         min_samples_leaf=model.min_samples_leaf,
-        max_bins=model.max_bins,
+        max_bins=255,
         l2_regularization=model.l2_regularization,
         early_stopping=False,
         random_state=0,

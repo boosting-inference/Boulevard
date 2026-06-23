@@ -84,7 +84,7 @@ def test_brat_p_hist_residual_formula():
         y,
         round_idx=2,
         slot_idx=1,
-        slot_prediction_sums=slot_prediction_sums,
+        previous_slot_prediction_sums=slot_prediction_sums,
         current_round_prediction_sum=current_round_prediction_sum,
     )
     expected_previous = (slot_prediction_sums[0] + slot_prediction_sums[2]) / 2
@@ -95,7 +95,7 @@ def test_brat_p_hist_residual_formula():
         y,
         round_idx=0,
         slot_idx=1,
-        slot_prediction_sums=slot_prediction_sums,
+        previous_slot_prediction_sums=slot_prediction_sums,
         current_round_prediction_sum=current_round_prediction_sum,
     )
     np.testing.assert_allclose(first_round_residual, y - current_round_prediction_sum)
@@ -105,10 +105,64 @@ def test_brat_p_hist_residual_formula():
         y,
         round_idx=0,
         slot_idx=1,
-        slot_prediction_sums=slot_prediction_sums,
+        previous_slot_prediction_sums=slot_prediction_sums,
         current_round_prediction_sum=current_round_prediction_sum,
     )
     np.testing.assert_allclose(dropped_first_round_residual, y)
+
+
+def test_brat_p_hist_fit_uses_frozen_previous_round_sums():
+    class RecordingBRATP(BRATPHistGradientBoostingRegressor):
+        def _residuals_for_next_tree_binned(
+            self,
+            y,
+            *,
+            round_idx,
+            slot_idx,
+            previous_slot_prediction_sums,
+            current_round_prediction_sum,
+        ):
+            self.recorded_previous_sums_.append(
+                (
+                    round_idx,
+                    slot_idx,
+                    previous_slot_prediction_sums.copy(),
+                )
+            )
+            return super()._residuals_for_next_tree_binned(
+                y,
+                round_idx=round_idx,
+                slot_idx=slot_idx,
+                previous_slot_prediction_sums=previous_slot_prediction_sums,
+                current_round_prediction_sum=current_round_prediction_sum,
+            )
+
+    X, y = make_regression(
+        n_samples=90,
+        n_features=2,
+        noise=0.5,
+        random_state=0,
+    )
+    model = RecordingBRATP(
+        n_rounds=2,
+        trees_per_round=3,
+        max_leaf_nodes=5,
+        min_samples_leaf=4,
+        max_bins=16,
+        random_state=0,
+    )
+    model.recorded_previous_sums_ = []
+
+    model.fit(X, y)
+
+    second_round_snapshots = [
+        previous_sums
+        for round_idx, _, previous_sums in model.recorded_previous_sums_
+        if round_idx == 1
+    ]
+    assert len(second_round_snapshots) == model.trees_per_round
+    for snapshot in second_round_snapshots[1:]:
+        np.testing.assert_allclose(snapshot, second_round_snapshots[0])
 
 
 def test_brat_p_hist_prediction_uses_round_slot_aggregation():
