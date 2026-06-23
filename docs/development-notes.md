@@ -8,9 +8,10 @@ This work adds the first serial histogram-tree BRAT-P estimator:
 BRATPHistGradientBoostingRegressor
 ```
 
-The class lives in `boulevard.estimators.bratp` and is exported from top-level
-`boulevard` as `bd.BRATPHistGradientBoostingRegressor`. Its public training API
-uses the BRAT-P round/slot structure:
+The class lives in `boulevard.estimators.sklearn.bratp` and is exported from
+top-level `boulevard` as `bd.BRATPHistGradientBoostingRegressor`. The old
+`boulevard.estimators.bratp` import path remains as a compatibility shim. Its
+public training API uses the BRAT-P round/slot structure:
 
 ```python
 model = bd.BRATPHistGradientBoostingRegressor(
@@ -87,10 +88,12 @@ This commit adds the first working experimental histogram-tree BRAT-D estimator:
 BRATDHistGradientBoostingRegressor
 ```
 
-The class lives in `boulevard.estimators.bratd` and is exported from top-level
-`boulevard` as `bd.BRATDHistGradientBoostingRegressor`. It inherits sklearn's public
-`HistGradientBoostingRegressor` API shape, but replaces the boosting loop with a
-custom BRAT-D loop using sklearn's private histogram internals:
+The class lives in `boulevard.estimators.sklearn.bratd` and is exported from
+top-level `boulevard` as `bd.BRATDHistGradientBoostingRegressor`. The old
+`boulevard.estimators.bratd` import path remains as a compatibility shim. It
+inherits sklearn's public `HistGradientBoostingRegressor` API shape, but
+replaces the boosting loop with a custom BRAT-D loop using sklearn's private
+histogram internals:
 
 - `_BinMapper` for sklearn-compatible continuous-feature binning.
 - `TreeGrower` for fitting one histogram tree from pseudo-residual gradients.

@@ -3,6 +3,7 @@ from boulevard.estimators import (
     BRATDHistGradientBoostingRegressor,
     BRATPHistGradientBoostingRegressor,
 )
+from boulevard.estimators import sklearn as bd_sklearn
 
 
 def test_import_boulevard():
@@ -11,6 +12,10 @@ def test_import_boulevard():
 
 def test_brat_d_hist_is_public_api():
     assert bd.BRATDHistGradientBoostingRegressor is BRATDHistGradientBoostingRegressor
+    assert (
+        bd_sklearn.BRATDHistGradientBoostingRegressor
+        is BRATDHistGradientBoostingRegressor
+    )
 
     model = bd.BRATDHistGradientBoostingRegressor(
         max_iter=3,
@@ -27,6 +32,10 @@ def test_brat_d_hist_is_public_api():
 
 def test_brat_p_hist_is_public_api():
     assert bd.BRATPHistGradientBoostingRegressor is BRATPHistGradientBoostingRegressor
+    assert (
+        bd_sklearn.BRATPHistGradientBoostingRegressor
+        is BRATPHistGradientBoostingRegressor
+    )
 
     model = bd.BRATPHistGradientBoostingRegressor(
         n_rounds=3,

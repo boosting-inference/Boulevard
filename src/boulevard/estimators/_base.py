@@ -104,7 +104,9 @@ class BackendRegressorMixin(ConformalIntervalMixin):
 
     def _check_is_fitted(self) -> None:
         if self.backend_ is None:
-            raise RuntimeError(f"This {type(self).__name__} instance is not fitted yet.")
+            raise RuntimeError(
+                f"This {type(self).__name__} instance is not fitted yet."
+            )
 
     def _make_backend(self) -> Any:
         raise NotImplementedError
