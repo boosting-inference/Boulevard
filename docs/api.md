@@ -4,43 +4,99 @@
 
 ### `BRATDHistGradientBoostingRegressor`
 
-Experimental sklearn histogram-tree backend for BRAT-D / Boulevard-style
-regularized dropout boosting.
+Sklearn histogram-tree backend for BRAT-D / Boulevard regularized dropout
+boosting. This is the current package candidate for the faithful sklearn-based
+BRAT-D backend: it reuses sklearn's histogram binning and single-tree grower,
+but replaces the boosting loop with BRAT-D residual construction and applies
+BRAT-D signal correction in `predict`.
 
 ```python
 import boulevard as bd
 
 model = bd.BRATDHistGradientBoostingRegressor(
-    max_iter=500,
+    max_iter=1000,
     learning_rate=0.45,
     dropout_rate=0.3,
     subsample_rate=0.8,
     max_depth=10,
-    max_leaf_nodes=1024,
+    max_leaf_nodes=512,
     min_samples_leaf=5,
     max_bins=255,
     early_stopping=False,
-    random_state=0,
     nystrom_subsample_rate=1.0,
+    random_state=0,
 )
 model.fit(X_train, y_train)
+
+# Optional but recommended for repeated interval calls. If omitted, interval
+# methods prepare the inference cache on first use with the training data.
+model.prepare_inference(X_calib, y_calib)
+
 pred = model.predict(X_test)
+ci_lower, ci_upper = model.confidence_interval(X_test, alpha=0.05)
+pi_lower, pi_upper = model.prediction_interval(X_test, alpha=0.05)
+ri_lower, ri_upper = model.reproduction_interval(X_test, alpha=0.05)
+norms = model.weight_norms(X_test)
 ```
 
-This estimator is the current package candidate for a faithful sklearn-based
-BRAT-D training backend. It uses sklearn histogram tree internals for binning and
-single-tree fitting, while replacing the boosting loop with BRAT-D residual
-construction.
+Important parameters:
+
+- `max_iter`: number of BRAT-D trees;
+- `learning_rate`: the Boulevard/BRAT-D `lambda` multiplier;
+- `dropout_rate`: probability of dropping an old tree when constructing the
+  next residual;
+- `subsample_rate`: row subsampling before fitting each new tree;
+- `max_depth`, `max_leaf_nodes`, `min_samples_leaf`, `max_bins`: sklearn
+  histogram-tree complexity controls;
+- `nystrom_subsample_rate`: fraction of observed histogram cells used as
+  Nyström landmarks for interval weight norms. The default `1.0` uses all
+  observed cells and gives the exact observed-cell solve.
+
+Interval methods use `alpha`, so `alpha=0.05` gives a 95% interval. The three
+main interval calls are:
+
+```python
+ci_lower, ci_upper = model.confidence_interval(X_test, alpha=0.05)
+pi_lower, pi_upper = model.prediction_interval(X_test, alpha=0.05)
+ri_lower, ri_upper = model.reproduction_interval(X_test, alpha=0.05)
+```
+
+Use a held-out calibration set when you want residual variance estimated away
+from the training set:
+
+```python
+model.prepare_inference(X_calib, y_calib)
+ci_lower, ci_upper = model.confidence_interval(X_test, alpha=0.05)
+```
+
+For one-off calls, the calibration data can also be passed directly:
+
+```python
+ci_lower, ci_upper = model.confidence_interval(
+    X_test,
+    alpha=0.05,
+    X_calib=X_calib,
+    y_calib=y_calib,
+)
+```
+
+Useful diagnostics:
+
+```python
+bins = model.apply_bin_indices(X_test)
+cells = model.apply_cell_indices(X_test)
+norms = model.weight_norms(X_test)
+fit_diagnostics = model.fit_diagnostics_
+```
 
 Supported scope:
 
 - squared-error regression;
-- continuous features;
+- numeric features;
 - row subsampling through `subsample_rate`;
 - asymptotic BRAT-D confidence, prediction, and reproduction intervals;
-- observed histogram-cell inference with cached cell weight norms;
-- optional Nyström sketching for interval weight norms through
-  `nystrom_subsample_rate`.
+- cached observed histogram-cell inference;
+- optional Nyström sketching through `nystrom_subsample_rate`.
 
 Current limitations:
 
@@ -51,88 +107,79 @@ Current limitations:
 - no interaction constraints;
 - depends on sklearn private histogram-gradient-boosting internals.
 
-Interval methods prepare their inference cache automatically on first use. By
-default, the residual variance is estimated from the training data:
-
-```python
-lower, upper = model.confidence_interval(X_test)
-```
-
-To estimate residual variance from a held-out calibration set instead, pass the
-calibration data directly to an interval method:
-
-```python
-lower, upper = model.confidence_interval(
-    X_test,
-    X_calib=X_calib,
-    y_calib=y_calib,
-)
-```
-
-For repeated interval calls with the same calibration set, users can still call
-`prepare_inference` explicitly:
-
-```python
-model.prepare_inference(X_calib, y_calib)
-lower, upper = model.confidence_interval(X_test)
-```
-
-For a combined BRAT-D / BRAT-P plotted API example with a vanilla histogram
-gradient boosting baseline:
+For a combined BRAT-D / BRAT-P plotted API example with a vanilla
+`HistGradientBoostingRegressor` baseline:
 
 ```bash
 python examples/brat_histogram_api_demo.py --output /tmp/brat_histogram_api_demo.png
 ```
 
-To benchmark optional BRAT-P within-round parallel fitting, pass for example
-`--bratp-n-jobs 2`.
-
-The estimator defaults to `nystrom_subsample_rate=1.0`. In the current
-histogram-cell implementation, this selects all observed cells as landmarks and
-falls back to the stable exact observed-cell solve. Smaller values can be used
-for sketched interval inference experiments.
-
-The estimator also exposes `fit_diagnostics_` after fitting. This is intended for
-research diagnostics and currently reports timing for binning, BRAT-D residual
-construction, tree fitting, training-prediction caching, and interval-related
-cache behavior.
-
 ### `BRATPHistGradientBoostingRegressor`
 
-Experimental sklearn histogram-tree backend for BRAT-P parallelized Boulevard
-training.
+Sklearn histogram-tree backend for BRAT-P parallelized Boulevard training.
+BRAT-P trains trees in deterministic slots. Each round has `trees_per_round`
+slots, and slot `k` is trained against the completed-history residual that drops
+slot `k`. This is the parallelized paper variant, not random dropout.
 
 ```python
 import boulevard as bd
 
+total_tree_budget = 1000
+
 model = bd.BRATPHistGradientBoostingRegressor(
     n_rounds=100,
-    trees_per_round=5,
+    trees_per_round=total_tree_budget // 100,
     subsample_rate=0.8,
-    n_jobs=2,
     max_depth=10,
-    max_leaf_nodes=1024,
+    max_leaf_nodes=256,
     min_samples_leaf=5,
     max_bins=255,
     early_stopping=False,
-    random_state=0,
+    n_jobs=1,
     nystrom_subsample_rate=1.0,
+    random_state=0,
 )
 model.fit(X_train, y_train)
+model.prepare_inference(X_calib, y_calib)
+
 pred = model.predict(X_test)
+ci_lower, ci_upper = model.confidence_interval(X_test, alpha=0.05)
+pi_lower, pi_upper = model.prediction_interval(X_test, alpha=0.05)
+ri_lower, ri_upper = model.reproduction_interval(X_test, alpha=0.05)
+norms = model.weight_norms(X_test)
 ```
 
-This estimator uses deterministic slot dropping in the residual construction
-and exposes the same observed histogram-cell interval interface as the BRAT-D
-histogram estimator. BRAT-P can fit slot trees within each completed-history
-round in parallel with `n_jobs`; the default first round remains serial unless
-`drop_first_round=True`, because the default first round is a sequential warm
-start. The BRAT-P interval weights use the parallel KRR system `K^{-1} I + ((K -
-1) / K) K_n`, where `K = trees_per_round`.
+Important parameters:
 
-Like the BRAT-D histogram estimator, BRAT-P supports optional Nyström sketching
-for interval weight norms through `nystrom_subsample_rate`. The default `1.0`
-selects all observed cells and falls back to the exact observed-cell solve.
+- `n_rounds`: number of completed-history BRAT-P rounds;
+- `trees_per_round`: number of deterministic slots per round. The total tree
+  budget is `n_rounds * trees_per_round`;
+- `subsample_rate`: row subsampling before fitting each slot tree;
+- `n_jobs`: optional joblib thread count for fitting slot trees within a round.
+  Use `1` or `None` for serial fitting;
+- `drop_first_round`: if `False`, the first round uses a sequential warm start.
+  If `True`, the first round can be fit with the same completed-history logic as
+  later rounds;
+- `max_depth`, `max_leaf_nodes`, `min_samples_leaf`, `max_bins`: sklearn
+  histogram-tree complexity controls;
+- `nystrom_subsample_rate`: same observed-cell Nyström control as BRAT-D.
+
+BRAT-P exposes the same prediction, interval, calibration, bin/cell, and
+diagnostic methods as BRAT-D:
+
+```python
+model.prepare_inference(X_calib, y_calib)
+pred = model.predict(X_test)
+ci_lower, ci_upper = model.confidence_interval(X_test, alpha=0.05)
+pi_lower, pi_upper = model.prediction_interval(X_test, alpha=0.05)
+ri_lower, ri_upper = model.reproduction_interval(X_test, alpha=0.05)
+norms = model.weight_norms(X_test)
+cells = model.apply_cell_indices(X_test)
+fit_diagnostics = model.fit_diagnostics_
+```
+
+The BRAT-P interval weights use the parallel KRR system
+`K^{-1} I + ((K - 1) / K) K_n`, where `K = trees_per_round`.
 
 For a plotted diagnostic of the fitted signal, confidence and prediction bands,
 weight norms, interval widths, calibration residuals, RMSE, coverage, interval
@@ -141,6 +188,14 @@ example:
 
 ```bash
 python examples/brat_histogram_api_demo.py --output /tmp/brat_histogram_api_demo.png
+```
+
+To benchmark optional BRAT-P within-round parallel fitting, pass for example:
+
+```bash
+python examples/brat_histogram_api_demo.py \
+    --output /tmp/brat_histogram_api_demo.png \
+    --bratp-n-jobs 2
 ```
 
 ### `IEBMRegressor`
@@ -155,14 +210,27 @@ model = bd.IEBMRegressor(
     max_bins=64,
     learning_rate=1.0,
     subsample_rate=0.8,
+    warmup_rounds=20,
     truncation=10.0,
-    max_leaves=2,
+    max_depth=1,
     min_samples_leaf=10,
+    leave_one_out=False,
     random_state=0,
 )
 model.fit(X_train, y_train)
 pred = model.predict(X_test)
 bins = model.apply_bins(X_test)
+lower, upper, pred = model.predict_intervals(
+    X_test,
+    level=0.95,
+    mode="confidence",
+)
+term_lower, term_upper, term_pred = model.predict_feature_intervals(
+    0,
+    X_test[:, 0],
+    level=0.95,
+    mode="confidence",
+)
 ```
 
 This class intentionally rebuilds the IEBM path inside boulevard instead of
@@ -172,11 +240,19 @@ patching InterpretML private modules. The first version is deliberately narrow:
 - numeric features only;
 - main effects only;
 - one-dimensional binned tree updates;
+- additive warmup rounds followed by Boulevard-style averaging;
+- one-dimensional tree complexity controlled by `max_depth`, or by the lower
+  level `max_leaves` parameter;
+- frozen full-model residuals by default, with `leave_one_out=True` available
+  as an experimental residual variant;
+- EBM-style experimental interval APIs, `predict_intervals` and
+  `predict_feature_intervals`;
 - sklearn-compatible `fit`, `predict`, `get_params`, and cloning behavior.
 
 Current limitations:
 
-- no confidence, prediction, or reproduction intervals yet;
+- interval formulas are still experimental and should be treated as diagnostics
+  until coverage behavior is audited;
 - no interactions;
 - no categorical feature handling;
 - no `sample_weight`;
@@ -187,6 +263,15 @@ For a minimal fit/predict example:
 ```bash
 python examples/iebm_quickstart.py
 ```
+
+For a multivariate visual diagnostic with partial dependence plots, confidence
+bands, coverage annotations, residual variance, and bin-space weight norms:
+
+```bash
+python examples/iebm_visual_check.py --output /tmp/iebm_visual_check.png
+```
+
+The plotted bands use the experimental `predict_feature_intervals` API.
 
 ### `XGBRegressor`
 

@@ -48,7 +48,7 @@ def main() -> None:
         learning_rate=1.0,
         subsample_rate=0.8,
         truncation=10.0,
-        max_leaves=2,
+        max_depth=1,
         min_samples_leaf=10,
         random_state=0,
     )
