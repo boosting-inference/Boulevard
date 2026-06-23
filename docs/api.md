@@ -130,12 +130,6 @@ example:
 python examples/brat_histogram_api_demo.py --output /tmp/brat_histogram_api_demo.png
 ```
 
-### `BRATDRegressor`
-
-Exact sample-space BRAT-D prototype based on sklearn decision trees. This class
-is useful for checking the BRAT-D logic without histogram-cell compression, but
-the histogram estimator is the main sklearn backend candidate.
-
 ### `XGBRegressor`
 
 Preliminary XGBoost wrapper scaffold. This should not yet be interpreted as a

@@ -19,16 +19,21 @@ bd.BRATPHistGradientBoostingRegressor
 bd.XGBRegressor
 ```
 
-The old `boulevard.estimators.bratd`, `boulevard.estimators.bratp`, and
-`boulevard.estimators.brat` import paths remain as compatibility shims. Backend
-families such as `xgboost`, `lightgbm`, `catboost`, and `interpretml` are now
-packages under `boulevard.estimators`, which leaves a natural place for future
-backend-specific BRAT-D and BRAT-P variants.
+The old `boulevard.estimators.bratd` and `boulevard.estimators.bratp` import
+paths remain as compatibility shims. Backend families such as `xgboost`,
+`lightgbm`, `catboost`, and `interpretml` are now packages under
+`boulevard.estimators`, which leaves a natural place for future backend-specific
+BRAT-D and BRAT-P variants.
 
 Early scaffolding modules that were not used by the current estimators were
 removed: `boulevard.algorithms`, `boulevard.core`, empty `boulevard.inspection`,
 and the unused Nyström helper. Active shared code now lives in the places that
-current estimators actually import from: `backends`, `intervals`, and `kernels`.
+current estimators actually import from, mainly `backends` and `intervals`.
+
+The exact sample-space `BRATDRegressor` prototype was later removed from the
+public package surface. The histogram BRAT-D estimator is now the sklearn-backed
+BRAT-D implementation we intend to carry forward, so the prototype's private
+decision-tree backend and leaf-kernel helpers were removed with it.
 
 ## 2026-06-21: Experimental histogram BRAT-P backend
 
