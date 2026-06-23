@@ -39,7 +39,7 @@ class SubsampledDecisionTreeRegressor:
         X: np.ndarray,
         y: np.ndarray,
         sample_weight: np.ndarray | None = None,
-    ) -> "SubsampledDecisionTreeRegressor":
+    ) -> SubsampledDecisionTreeRegressor:
         """Fit a decision tree on a random row subsample."""
         if not 0 < self.subsample_rate <= 1:
             raise ValueError("subsample_rate must be in (0, 1].")

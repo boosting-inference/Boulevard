@@ -22,7 +22,7 @@ class XGBoostBackend:
         self.xgb_params = dict(xgb_params)
         self.model_: _XGBRegressor | None = None
 
-    def fit(self, X: Any, y: Any, **fit_kwargs: Any) -> "XGBoostBackend":
+    def fit(self, X: Any, y: Any, **fit_kwargs: Any) -> XGBoostBackend:
         """Fit the wrapped XGBoost regressor."""
         self.model_ = _XGBRegressor(**self.xgb_params)
         self.model_.fit(X, y, **fit_kwargs)

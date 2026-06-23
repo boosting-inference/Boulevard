@@ -20,7 +20,7 @@ class SplitConformalInterval:
         y_true: np.ndarray,
         y_pred: np.ndarray,
         alpha: float = 0.1,
-    ) -> "SplitConformalInterval":
+    ) -> SplitConformalInterval:
         """Fit the conformal interval using calibration residuals."""
         if not 0 < alpha < 1:
             raise ValueError("alpha must be between 0 and 1.")

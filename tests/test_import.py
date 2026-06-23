@@ -2,8 +2,13 @@ import boulevard as bd
 from boulevard.estimators import (
     BRATDHistGradientBoostingRegressor,
     BRATPHistGradientBoostingRegressor,
+    XGBRegressor,
 )
 from boulevard.estimators import sklearn as bd_sklearn
+from boulevard.estimators.catboost import CatBoostRegressor
+from boulevard.estimators.interpretml import EBMRegressor
+from boulevard.estimators.lightgbm import LGBMRegressor
+from boulevard.estimators.xgboost import XGBRegressor as NamespacedXGBRegressor
 
 
 def test_import_boulevard():
@@ -47,3 +52,11 @@ def test_brat_p_hist_is_public_api():
     assert model.get_params()["trees_per_round"] == 2
     model.set_params(n_rounds=4)
     assert model.n_rounds == 4
+
+
+def test_backend_estimator_namespaces_import():
+    assert bd.XGBRegressor is XGBRegressor
+    assert NamespacedXGBRegressor is XGBRegressor
+    assert LGBMRegressor.__name__ == "LGBMRegressor"
+    assert CatBoostRegressor.__name__ == "CatBoostRegressor"
+    assert EBMRegressor.__name__ == "EBMRegressor"

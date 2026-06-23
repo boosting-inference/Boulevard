@@ -14,7 +14,7 @@ class TreeEnsembleBackend(Protocol):
     InterpretML, or the native BRAT tree builder to a common surface.
     """
 
-    def fit(self, X: Any, y: Any, **fit_kwargs: Any) -> "TreeEnsembleBackend":
+    def fit(self, X: Any, y: Any, **fit_kwargs: Any) -> TreeEnsembleBackend:
         """Fit the backend model."""
 
     def predict(self, X: Any, **predict_kwargs: Any) -> np.ndarray:

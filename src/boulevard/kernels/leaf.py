@@ -57,7 +57,9 @@ def leaf_kernel_vector(
     if train_leaves.ndim != 2 or test_leaves.ndim != 2:
         raise ValueError("leaf indices must be two-dimensional.")
     if train_leaves.shape[1] != test_leaves.shape[1]:
-        raise ValueError("train and test leaf indices must have the same number of trees.")
+        raise ValueError(
+            "train and test leaf indices must have the same number of trees."
+        )
 
     n_train, n_trees = train_leaves.shape
     n_test = test_leaves.shape[0]

@@ -1,5 +1,35 @@
 # Development Notes
 
+## 2026-06-23: Backend-oriented estimator layout
+
+The estimator package is now organized by backend family. Sklearn-backed
+implementations live under:
+
+```text
+boulevard.estimators.sklearn
+```
+
+The top-level public API remains unchanged:
+
+```python
+import boulevard as bd
+
+bd.BRATDHistGradientBoostingRegressor
+bd.BRATPHistGradientBoostingRegressor
+bd.XGBRegressor
+```
+
+The old `boulevard.estimators.bratd`, `boulevard.estimators.bratp`, and
+`boulevard.estimators.brat` import paths remain as compatibility shims. Backend
+families such as `xgboost`, `lightgbm`, `catboost`, and `interpretml` are now
+packages under `boulevard.estimators`, which leaves a natural place for future
+backend-specific BRAT-D and BRAT-P variants.
+
+Early scaffolding modules that were not used by the current estimators were
+removed: `boulevard.algorithms`, `boulevard.core`, empty `boulevard.inspection`,
+and the unused Nyström helper. Active shared code now lives in the places that
+current estimators actually import from: `backends`, `intervals`, and `kernels`.
+
 ## 2026-06-21: Experimental histogram BRAT-P backend
 
 This work adds the first serial histogram-tree BRAT-P estimator:
