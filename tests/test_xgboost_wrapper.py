@@ -1,8 +1,11 @@
 import numpy as np
+import pytest
 from sklearn.datasets import make_regression
 from sklearn.model_selection import train_test_split
 
-import boulevard as bd
+pytest.importorskip("xgboost")
+
+from boulevard.estimators.xgboost import XGBRegressor
 
 
 def test_xgb_regressor_fit_predict():
@@ -13,7 +16,7 @@ def test_xgb_regressor_fit_predict():
         random_state=0,
     )
 
-    model = bd.XGBRegressor(
+    model = XGBRegressor(
         n_estimators=5,
         max_depth=2,
         learning_rate=0.1,
@@ -37,7 +40,7 @@ def test_xgb_regressor_leaf_indices():
         random_state=0,
     )
 
-    model = bd.XGBRegressor(
+    model = XGBRegressor(
         n_estimators=5,
         max_depth=2,
         learning_rate=0.1,
@@ -75,7 +78,7 @@ def test_xgb_regressor_conformal_interval():
         random_state=0,
     )
 
-    model = bd.XGBRegressor(
+    model = XGBRegressor(
         n_estimators=10,
         max_depth=2,
         learning_rate=0.1,

@@ -4,8 +4,8 @@ from sklearn.base import clone
 from sklearn.datasets import make_regression
 from sklearn.model_selection import train_test_split
 
-from boulevard.estimators.bratd import BRATDHistGradientBoostingRegressor
 from boulevard.estimators.sklearn._nystrom import nystrom_weight_norms
+from boulevard.estimators.sklearn.bratd import BRATDHistGradientBoostingRegressor
 
 
 def test_brat_d_hist_skeleton_is_sklearn_cloneable():

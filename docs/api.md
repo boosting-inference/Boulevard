@@ -273,7 +273,9 @@ python examples/iebm_visual_check.py --output /tmp/iebm_visual_check.png
 
 The plotted bands use the experimental `predict_feature_intervals` API.
 
-### `XGBRegressor`
+## Planned Backend Namespaces
 
-Preliminary XGBoost wrapper scaffold. This should not yet be interpreted as a
-faithful Boulevard-trained XGBoost backend.
+The first publishable package target is sklearn-compatible estimators. XGBoost,
+LightGBM, and CatBoost integrations are kept as development placeholders only
+and should not be treated as stable public APIs or faithful Boulevard-trained
+backends yet.

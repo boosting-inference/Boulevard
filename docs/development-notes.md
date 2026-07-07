@@ -49,21 +49,21 @@ implementations live under:
 boulevard.estimators.sklearn
 ```
 
-The top-level public API remains unchanged:
+The sklearn-first top-level public API is:
 
 ```python
 import boulevard as bd
 
 bd.BRATDHistGradientBoostingRegressor
 bd.BRATPHistGradientBoostingRegressor
-bd.XGBRegressor
 ```
 
 The old `boulevard.estimators.bratd` and `boulevard.estimators.bratp` import
-paths remain as compatibility shims. Backend families such as `xgboost`,
-`lightgbm`, `catboost`, and `interpretml` are now packages under
-`boulevard.estimators`, which leaves a natural place for future backend-specific
-BRAT-D and BRAT-P variants.
+paths were removed during release cleanup; canonical imports now go through
+`boulevard.estimators.sklearn`. Backend families such as `xgboost`, `lightgbm`,
+`catboost`, and `interpretml` remain namespaced development areas under
+`boulevard.estimators`, but XGBoost/LightGBM/CatBoost are not top-level public
+APIs for the sklearn-first release.
 
 Early scaffolding modules that were not used by the current estimators were
 removed: `boulevard.algorithms`, `boulevard.core`, empty `boulevard.inspection`,
@@ -85,9 +85,8 @@ BRATPHistGradientBoostingRegressor
 ```
 
 The class lives in `boulevard.estimators.sklearn.bratp` and is exported from
-top-level `boulevard` as `bd.BRATPHistGradientBoostingRegressor`. The old
-`boulevard.estimators.bratp` import path remains as a compatibility shim. Its
-public training API uses the BRAT-P round/slot structure:
+top-level `boulevard` as `bd.BRATPHistGradientBoostingRegressor`. Its public
+training API uses the BRAT-P round/slot structure:
 
 ```python
 model = bd.BRATPHistGradientBoostingRegressor(
@@ -165,11 +164,10 @@ BRATDHistGradientBoostingRegressor
 ```
 
 The class lives in `boulevard.estimators.sklearn.bratd` and is exported from
-top-level `boulevard` as `bd.BRATDHistGradientBoostingRegressor`. The old
-`boulevard.estimators.bratd` import path remains as a compatibility shim. It
-inherits sklearn's public `HistGradientBoostingRegressor` API shape, but
-replaces the boosting loop with a custom BRAT-D loop using sklearn's private
-histogram internals:
+top-level `boulevard` as `bd.BRATDHistGradientBoostingRegressor`. It inherits
+sklearn's public `HistGradientBoostingRegressor` API shape, but replaces the
+boosting loop with a custom BRAT-D loop using sklearn's private histogram
+internals:
 
 - `_BinMapper` for sklearn-compatible continuous-feature binning.
 - `TreeGrower` for fitting one histogram tree from pseudo-residual gradients.
@@ -321,3 +319,5 @@ The intended training semantics are:
 5. Store unscaled tree predictors; apply Boulevard/BRAT-D averaging and signal correction in prediction.
 
 The first inference extension is observed-cell compression: use only observed multidimensional binned cells, build leaf blocks in cell-space, and compute the BRAT-D influence norm through a cell-count-weighted linear system instead of a full sample-space kernel. This is implemented in the experimental histogram class, but it should still be treated as provisional until we audit the residual-round denominator and compare the cell-space system against a small expanded sample-space calculation.
+
+## 2026-06-24: wrap intervals in an Interval() method, arguments specifying which type of intervals they want

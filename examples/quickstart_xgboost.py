@@ -1,9 +1,9 @@
-"""Quickstart demo for Boulevard XGBoost wrapper."""
+"""Development demo for the preliminary Boulevard XGBoost wrapper."""
 
 from sklearn.datasets import make_regression
 from sklearn.model_selection import train_test_split
 
-import boulevard as bd
+from boulevard.estimators.xgboost import XGBRegressor
 
 
 def main() -> None:
@@ -28,7 +28,7 @@ def main() -> None:
         random_state=0,
     )
 
-    model = bd.XGBRegressor(
+    model = XGBRegressor(
         n_estimators=50,
         max_depth=3,
         learning_rate=0.05,
