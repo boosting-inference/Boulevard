@@ -59,3 +59,80 @@ jobs:
           assert any(name.endswith(".whl") for name in artifacts)
           assert any(name.endswith(".tar.gz") for name in artifacts)
           PY
+
+      - name: Smoke test installed wheel
+        run: |
+          WHEEL_PATH="$(python - <<'PY'
+          import pathlib
+
+          wheels = sorted(pathlib.Path("dist").glob("*.whl"))
+          assert len(wheels) == 1, wheels
+          print(wheels[0])
+          PY
+          )"
+
+          python -m venv /tmp/boulevard-wheel-smoke
+          /tmp/boulevard-wheel-smoke/bin/python -m pip install --upgrade pip
+          /tmp/boulevard-wheel-smoke/bin/python -m pip install "$WHEEL_PATH"
+          /tmp/boulevard-wheel-smoke/bin/python -m pip check
+          /tmp/boulevard-wheel-smoke/bin/python - <<'PY'
+          import numpy as np
+          import boulevard as bd
+
+          assert bd.__version__ == "0.0.1"
+          assert hasattr(bd, "BRATDHistGradientBoostingRegressor")
+          assert hasattr(bd, "BRATPHistGradientBoostingRegressor")
+          assert hasattr(bd, "IEBMRegressor")
+          assert not hasattr(bd, "XGBRegressor")
+
+          rng = np.random.default_rng(0)
+          X = rng.uniform(size=(90, 2))
+          y = np.sin(2 * np.pi * X[:, 0]) + rng.normal(scale=0.1, size=90)
+
+          bratd = bd.BRATDHistGradientBoostingRegressor(
+              max_iter=3,
+              learning_rate=0.5,
+              dropout_rate=0.2,
+              max_leaf_nodes=4,
+              min_samples_leaf=4,
+              max_bins=16,
+              early_stopping=False,
+              random_state=0,
+          )
+          bratd.fit(X[:60], y[:60])
+          bratd.prepare_inference(X[60:], y[60:])
+          pred = bratd.predict(X[60:65])
+          lower, upper = bratd.confidence_interval(X[60:65])
+          assert pred.shape == lower.shape == upper.shape == (5,)
+          assert np.all(lower <= upper)
+
+          bratp = bd.BRATPHistGradientBoostingRegressor(
+              n_rounds=2,
+              trees_per_round=2,
+              max_leaf_nodes=4,
+              min_samples_leaf=4,
+              max_bins=16,
+              early_stopping=False,
+              random_state=0,
+          )
+          bratp.fit(X[:60], y[:60])
+          bratp.prepare_inference(X[60:], y[60:])
+          pred = bratp.predict(X[60:65])
+          lower, upper = bratp.confidence_interval(X[60:65])
+          assert pred.shape == lower.shape == upper.shape == (5,)
+          assert np.all(lower <= upper)
+
+          iebm = bd.IEBMRegressor(
+              max_rounds=4,
+              max_bins=8,
+              max_depth=1,
+              min_samples_leaf=4,
+              random_state=0,
+          )
+          iebm.fit(X[:60], y[:60])
+          iebm.prepare_inference(X[60:], y[60:])
+          lower, upper, pred = iebm.predict_intervals(X[60:65], mode="confidence")
+          assert pred.shape == lower.shape == upper.shape == (5,)
+          assert np.all(lower <= pred)
+          assert np.all(pred <= upper)
+          PY

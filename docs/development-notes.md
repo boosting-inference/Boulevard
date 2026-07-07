@@ -19,11 +19,11 @@ Boulevard-trained backends until each backend has its own implementation audit.
 
 The package metadata, README, public API tests, wheel build, and GitHub Actions
 CI have been updated around this sklearn-first release target. The CI workflow
-runs lint, tests, and source/wheel builds on Python 3.10, 3.11, and 3.12.
+runs lint, tests, source/wheel builds, and a clean install-from-wheel smoke test
+on Python 3.10, 3.11, and 3.12.
 
 Remaining pre-release work is mostly packaging and release hygiene:
 
-- do one clean install-from-wheel smoke test on a fresh machine or CI runner;
 - decide the first release version and tag policy;
 - optionally publish to TestPyPI before PyPI;
 - keep IEBM intervals marked experimental until more coverage diagnostics are
