@@ -17,11 +17,12 @@ XGBoost, LightGBM, and CatBoost remain development namespaces. They are not
 top-level public APIs yet, and they should not be advertised as faithful
 Boulevard-trained backends until each backend has its own implementation audit.
 
-The package metadata, README, public API tests, and wheel build have been
-updated around this sklearn-first release target. Remaining pre-release work is
-mostly packaging and release hygiene:
+The package metadata, README, public API tests, wheel build, and GitHub Actions
+CI have been updated around this sklearn-first release target. The CI workflow
+runs lint, tests, and source/wheel builds on Python 3.10, 3.11, and 3.12.
 
-- add continuous integration for lint, tests, and build checks;
+Remaining pre-release work is mostly packaging and release hygiene:
+
 - decide whether to ship or exclude tests in the source distribution;
 - do one clean install-from-wheel smoke test on a fresh machine or CI runner;
 - decide the first release version and tag policy;
