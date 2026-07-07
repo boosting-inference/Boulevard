@@ -25,8 +25,9 @@ class IEBMRegressor(BaseEstimator, RegressorMixin):
     residual, center and truncate the update, then average it into the feature
     function.
 
-    This initial implementation supports numeric regression only.  Interval
-    methods will be added after the training path is audited.
+    This initial implementation supports numeric regression only.  It exposes
+    bin-space interval diagnostics, but those intervals remain experimental
+    until the coverage behavior is audited more broadly.
     """
 
     def __init__(
@@ -82,6 +83,7 @@ class IEBMRegressor(BaseEstimator, RegressorMixin):
         self.feature_names_in_ = np.array([f"x{idx}" for idx in range(n_features)])
         self.X_train_ = X.copy()
         self.y_train_ = y.copy()
+        self.interval_calibrations_ = {}
 
         self.bin_edges_ = self._fit_bin_edges(X)
         train_bins = self._bin_data(X)
@@ -243,9 +245,10 @@ class IEBMRegressor(BaseEstimator, RegressorMixin):
     ) -> IEBMRegressor:
         """Prepare bin-space diagnostic inference quantities.
 
-        The current IEBM prototype does not expose confidence intervals yet.
-        This method only prepares the residual variance estimate and the
-        bin-level influence-norm cache used by :meth:`weight_norms`.
+        This estimates residual variance from held-out calibration data, or
+        from the training data if no calibration data are supplied, and builds
+        the bin-level influence-norm cache used by :meth:`weight_norms`,
+        :meth:`predict_intervals`, and :meth:`predict_feature_intervals`.
         """
         check_is_fitted(self, "term_scores_")
 
@@ -276,6 +279,7 @@ class IEBMRegressor(BaseEstimator, RegressorMixin):
         self.X_inference_calib_ = X_var.copy()
         self.y_inference_calib_ = y_var.copy()
         self.sigma_hat2_ = float(np.var(residuals, ddof=1))
+        self.interval_calibrations_ = {}
         self._prepare_bin_inference_cache()
         self.inference_diagnostics_ = {
             "n_calibration_rows": int(X_var.shape[0]),
@@ -322,7 +326,57 @@ class IEBMRegressor(BaseEstimator, RegressorMixin):
             sigma=sigma,
             scale=self.boulevard_scale_,
         )
+        half_width = half_width * self._interval_calibration_scale(mode, level)
         return preds - half_width, preds + half_width, preds
+
+    def calibrate_intervals(
+        self,
+        X_calib: Any,
+        y_calib: Any,
+        level: float = 0.95,
+        mode: str = "prediction",
+        sigma: float | None = None,
+        propagate_to_ci_ri: bool = False,
+    ) -> float:
+        """Calibrate interval widths on held-out response data.
+
+        The calibration factor is the smallest multiplier that makes
+        ``predict(X_calib) +/- factor * raw_width`` cover at least ``level`` of
+        the observed calibration responses.  This is most natural for
+        ``mode="prediction"`` because the calibration targets noisy responses.
+        """
+        check_is_fitted(self, "term_scores_")
+        self.prepare_inference(X_calib, y_calib)
+        X_calib = self._validate_X_for_prediction(X_calib)
+        y_calib = np.asarray(y_calib, dtype=float)
+        if y_calib.ndim != 1:
+            raise ValueError("y_calib must be one-dimensional.")
+        if X_calib.shape[0] != y_calib.shape[0]:
+            raise ValueError(
+                "X_calib and y_calib must contain the same number of rows."
+            )
+
+        preds = self.predict(X_calib)
+        norms = self.weight_norms(X_calib)
+        raw_width = self._interval_half_width(
+            norms,
+            level=level,
+            mode=mode,
+            sigma=sigma,
+            scale=self.boulevard_scale_,
+        )
+        calibration = self._find_min_interval_scale(
+            y_true=y_calib,
+            y_pred=preds,
+            half_width=raw_width,
+            target=level,
+        )
+        key = (mode, float(level))
+        self.interval_calibrations_[key] = calibration
+        if propagate_to_ci_ri and mode == "prediction":
+            self.interval_calibrations_[("confidence", float(level))] = calibration
+            self.interval_calibrations_[("reproduction", float(level))] = calibration
+        return calibration
 
     def predict_feature_intervals(
         self,
@@ -362,7 +416,13 @@ class IEBMRegressor(BaseEstimator, RegressorMixin):
             sigma=sigma,
             scale=2.0,
         )
+        half_width = half_width * self._interval_calibration_scale(mode, level)
         return preds - half_width, preds + half_width, preds
+
+    def _interval_calibration_scale(self, mode: str, level: float) -> float:
+        if not hasattr(self, "interval_calibrations_"):
+            self.interval_calibrations_ = {}
+        return float(self.interval_calibrations_.get((mode, float(level)), 1.0))
 
     def _interval_half_width(
         self,
@@ -395,6 +455,53 @@ class IEBMRegressor(BaseEstimator, RegressorMixin):
         if hasattr(self, "sigma_") and self.sigma_ > 0:
             return float(self.sigma_)
         return 1e-8
+
+    @staticmethod
+    def _interval_coverage(
+        scale: float,
+        y_true: np.ndarray,
+        y_pred: np.ndarray,
+        half_width: np.ndarray,
+    ) -> float:
+        lower = y_pred - scale * half_width
+        upper = y_pred + scale * half_width
+        return float(np.mean((y_true >= lower) & (y_true <= upper)))
+
+    @classmethod
+    def _find_min_interval_scale(
+        cls,
+        *,
+        y_true: np.ndarray,
+        y_pred: np.ndarray,
+        half_width: np.ndarray,
+        target: float,
+        tol: float = 1e-3,
+        c_max: float = 50.0,
+        max_iters: int = 50,
+    ) -> float:
+        if not 0 < target < 1:
+            raise ValueError("level must be in (0, 1).")
+        if y_true.shape != y_pred.shape or y_true.shape != half_width.shape:
+            raise ValueError("Calibration arrays must have the same shape.")
+        if not np.all(np.isfinite(y_true)):
+            raise ValueError("y_calib must contain finite numeric values.")
+        if not np.all(np.isfinite(half_width)) or np.any(half_width < 0):
+            raise ValueError("Interval half-widths must be finite and nonnegative.")
+
+        lo = 0.0
+        hi = float(c_max)
+        if cls._interval_coverage(hi, y_true, y_pred, half_width) < target:
+            raise ValueError("c_max is too small to reach the requested coverage.")
+
+        for _ in range(max_iters):
+            mid = 0.5 * (lo + hi)
+            if cls._interval_coverage(mid, y_true, y_pred, half_width) >= target:
+                hi = mid
+            else:
+                lo = mid
+            if hi - lo < tol:
+                break
+        return hi
 
     def _validate_iebm_params(self) -> None:
         if self.max_rounds < 1:

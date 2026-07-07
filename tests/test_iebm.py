@@ -166,6 +166,30 @@ def test_iebm_prepare_inference_and_weight_norms():
     assert np.all(norms >= 0)
 
 
+def test_iebm_bin_space_weight_norm_matches_hand_calculation():
+    model = IEBMRegressor()
+    model.n_features_in_ = 1
+    model.X_train_ = np.array([[0.1], [0.2], [0.9]])
+    model.y_train_ = np.zeros(3)
+    model.bin_edges_ = [np.array([0.5])]
+    model.n_bins_ = np.array([2])
+    model.bin_counts_ = [np.array([2.0, 1.0])]
+    model.structure_sums_ = [np.eye(2)]
+    model.structure_update_counts_ = np.array([1])
+    model.term_scores_ = [np.zeros(2)]
+    model.intercept_ = 0.0
+    model.sigma_hat2_ = 1.0
+
+    model._prepare_bin_inference_cache()
+
+    expected = np.sqrt(6.0) / 7.0
+    np.testing.assert_allclose(model._feature_bin_norm_sq_[0], [6.0 / 49.0, 6.0 / 49.0])
+    np.testing.assert_allclose(
+        model.weight_norms(np.array([[0.1], [0.9]])),
+        [expected, expected],
+    )
+
+
 def test_iebm_predict_intervals_follow_ebm_api_shape():
     X, y, _ = _make_additive_data(n_samples=120)
     model = IEBMRegressor(
@@ -195,6 +219,40 @@ def test_iebm_predict_intervals_follow_ebm_api_shape():
     assert np.all(pred <= upper)
     assert np.all(feat_lower <= feat_pred)
     assert np.all(feat_pred <= feat_upper)
+
+
+def test_iebm_calibrate_intervals_reaches_calibration_coverage():
+    X, y, _ = _make_additive_data(n_samples=180)
+    X_train, y_train = X[:120], y[:120]
+    X_calib, y_calib = X[120:], y[120:]
+    level = 0.9
+    model = IEBMRegressor(
+        max_rounds=12,
+        max_bins=12,
+        max_depth=2,
+        min_samples_leaf=4,
+        random_state=0,
+    ).fit(X_train, y_train)
+
+    scale = model.calibrate_intervals(
+        X_calib,
+        y_calib,
+        level=level,
+        mode="prediction",
+        propagate_to_ci_ri=True,
+    )
+    lower, upper, _ = model.predict_intervals(
+        X_calib,
+        level=level,
+        mode="prediction",
+    )
+    coverage = np.mean((y_calib >= lower) & (y_calib <= upper))
+
+    assert scale > 0
+    assert coverage >= level
+    assert model.interval_calibrations_[("prediction", level)] == pytest.approx(scale)
+    assert model.interval_calibrations_[("confidence", level)] == pytest.approx(scale)
+    assert model.interval_calibrations_[("reproduction", level)] == pytest.approx(scale)
 
 
 def test_iebm_predict_intervals_reject_invalid_mode():

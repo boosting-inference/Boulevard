@@ -199,6 +199,12 @@ model = bd.IEBMRegressor(
 )
 model.fit(X_train, y_train)
 model.prepare_inference(X_calib, y_calib)
+pi_scale = model.calibrate_intervals(
+    X_calib,
+    y_calib,
+    level=0.95,
+    mode="prediction",
+)
 
 pred = model.predict(X_test)
 bins = model.apply_bins(X_test)
@@ -226,6 +232,7 @@ Current scope:
   `max_leaves` parameter;
 - EBM-style experimental interval APIs, `predict_intervals` and
   `predict_feature_intervals`;
+- optional held-out interval calibration through `calibrate_intervals`;
 - scikit-learn-compatible `fit`, `predict`, `get_params`, and cloning behavior.
 
 Current limitations:

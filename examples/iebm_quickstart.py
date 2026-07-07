@@ -63,6 +63,12 @@ def main() -> None:
     )
     model.fit(X_train, y_train)
     model.prepare_inference(X_calib, y_calib)
+    pi_scale = model.calibrate_intervals(
+        X_calib,
+        y_calib,
+        level=0.95,
+        mode="prediction",
+    )
 
     train_pred = model.predict(X_train)
     test_pred = model.predict(X_test)
@@ -72,6 +78,12 @@ def main() -> None:
         level=0.95,
         mode="confidence",
     )
+    pi_lower, pi_upper, _ = model.predict_intervals(
+        X_test,
+        level=0.95,
+        mode="prediction",
+    )
+    pi_coverage = float(np.mean((y_test >= pi_lower) & (y_test <= pi_upper)))
 
     print("IEBM quickstart")
     print(
@@ -85,6 +97,8 @@ def main() -> None:
     print(f"95% CI output shape: {ci_lower.shape}")
     print(f"mean 95% CI width: {float(np.mean(ci_upper - ci_lower)):.4f}")
     print(f"CI prediction matches predict: {bool(np.allclose(ci_pred, test_pred))}")
+    print(f"prediction interval calibration scale: {pi_scale:.4f}")
+    print(f"calibrated 95% PI coverage vs noisy y: {pi_coverage:.3f}")
     print(f"sigma_hat2: {model.sigma_hat2_:.4f}")
     print(f"total bins: {model.fit_diagnostics_['total_bins']}")
     print(f"fit seconds: {model.fit_diagnostics_['total_seconds']:.4f}")
