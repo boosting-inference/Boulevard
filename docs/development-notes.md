@@ -23,13 +23,19 @@ runs lint, tests, and source/wheel builds on Python 3.10, 3.11, and 3.12.
 
 Remaining pre-release work is mostly packaging and release hygiene:
 
-- decide whether to ship or exclude tests in the source distribution;
 - do one clean install-from-wheel smoke test on a fresh machine or CI runner;
 - decide the first release version and tag policy;
 - optionally publish to TestPyPI before PyPI;
 - keep IEBM intervals marked experimental until more coverage diagnostics are
   run;
 - keep non-sklearn backends namespaced as development work.
+
+Source distributions intentionally include `tests/`. Wheels do not install the
+test suite, so ordinary `pip install boulevard-boosting` users receive only the
+package code. Keeping tests in the source archive is useful for research
+software because downstream users can verify the package against their local
+Python/scikit-learn environment, which matters here because the sklearn
+histogram estimators rely on private scikit-learn internals.
 
 ## 2026-06-23: Nyström sketching for histogram inference
 
