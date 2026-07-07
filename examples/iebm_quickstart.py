@@ -5,8 +5,8 @@ Run from the repository root with:
     python examples/iebm_quickstart.py
 
 The current IEBM implementation is a first sklearn-style training backend:
-numeric features, squared-error regression, and main effects only.  Interval
-methods are intentionally not exposed yet.
+numeric features, squared-error regression, main effects only, and experimental
+bin-space intervals.
 """
 
 from __future__ import annotations
@@ -34,12 +34,21 @@ def main() -> None:
     )
     y = signal + rng.normal(scale=0.25, size=n_samples)
 
-    X_train, X_test, y_train, y_test, signal_train, signal_test = train_test_split(
-        X,
-        y,
-        signal,
-        test_size=0.35,
-        random_state=0,
+    X_train, X_holdout, y_train, y_holdout, signal_train, signal_holdout = (
+        train_test_split(
+            X,
+            y,
+            signal,
+            test_size=0.35,
+            random_state=0,
+        )
+    )
+    X_calib, X_test, y_calib, y_test, _signal_calib, signal_test = train_test_split(
+        X_holdout,
+        y_holdout,
+        signal_holdout,
+        test_size=0.5,
+        random_state=1,
     )
 
     model = bd.IEBMRegressor(
@@ -53,18 +62,30 @@ def main() -> None:
         random_state=0,
     )
     model.fit(X_train, y_train)
+    model.prepare_inference(X_calib, y_calib)
 
     train_pred = model.predict(X_train)
     test_pred = model.predict(X_test)
     test_bins = model.apply_bins(X_test[:5])
+    ci_lower, ci_upper, ci_pred = model.predict_intervals(
+        X_test,
+        level=0.95,
+        mode="confidence",
+    )
 
     print("IEBM quickstart")
-    print(f"train/test sizes: {X_train.shape[0]}/{X_test.shape[0]}")
-    print("scope: numeric squared-error main effects; no intervals yet")
+    print(
+        "train/calib/test sizes: "
+        f"{X_train.shape[0]}/{X_calib.shape[0]}/{X_test.shape[0]}"
+    )
+    print("scope: numeric squared-error main effects; intervals are experimental")
     print(f"train RMSE vs signal: {_rmse(signal_train, train_pred):.4f}")
     print(f"test RMSE vs signal: {_rmse(signal_test, test_pred):.4f}")
     print(f"test RMSE vs noisy y: {_rmse(y_test, test_pred):.4f}")
-    print(f"sigma: {model.sigma_:.4f}")
+    print(f"95% CI output shape: {ci_lower.shape}")
+    print(f"mean 95% CI width: {float(np.mean(ci_upper - ci_lower)):.4f}")
+    print(f"CI prediction matches predict: {bool(np.allclose(ci_pred, test_pred))}")
+    print(f"sigma_hat2: {model.sigma_hat2_:.4f}")
     print(f"total bins: {model.fit_diagnostics_['total_bins']}")
     print(f"fit seconds: {model.fit_diagnostics_['total_seconds']:.4f}")
     print(f"first five binned test rows shape: {test_bins.shape}")

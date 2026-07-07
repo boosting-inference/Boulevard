@@ -1,5 +1,35 @@
 # Development Notes
 
+## Current sklearn-first release status
+
+The current publishable package target is the sklearn-compatible estimator
+surface:
+
+```python
+import boulevard as bd
+
+bd.BRATDHistGradientBoostingRegressor
+bd.BRATPHistGradientBoostingRegressor
+bd.IEBMRegressor
+```
+
+XGBoost, LightGBM, and CatBoost remain development namespaces. They are not
+top-level public APIs yet, and they should not be advertised as faithful
+Boulevard-trained backends until each backend has its own implementation audit.
+
+The package metadata, README, public API tests, and wheel build have been
+updated around this sklearn-first release target. Remaining pre-release work is
+mostly packaging and release hygiene:
+
+- add continuous integration for lint, tests, and build checks;
+- decide whether to ship or exclude tests in the source distribution;
+- do one clean install-from-wheel smoke test on a fresh machine or CI runner;
+- decide the first release version and tag policy;
+- optionally publish to TestPyPI before PyPI;
+- keep IEBM intervals marked experimental until more coverage diagnostics are
+  run;
+- keep non-sklearn backends namespaced as development work.
+
 ## 2026-06-23: Nyström sketching for histogram inference
 
 BRAT-D and BRAT-P histogram estimators now support optional Nyström sketching

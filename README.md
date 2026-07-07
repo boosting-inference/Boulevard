@@ -59,6 +59,22 @@ pi_lower, pi_upper = model.prediction_interval(X_test, alpha=0.05)
 See `examples/brat_histogram_api_demo.py` for a complete BRAT-D / BRAT-P
 diagnostic demo with RMSE, coverage, interval width, and timing summaries.
 
+`prepare_inference` estimates residual variance and builds the cached
+histogram-cell linear algebra used by interval methods. If it is omitted, BRAT-D
+and BRAT-P interval methods prepare inference on first use with the training
+data. A held-out calibration set is usually preferable for variance estimation.
+
+For IEBM:
+
+```python
+model = bd.IEBMRegressor(max_rounds=100, max_bins=64, max_depth=1)
+model.fit(X_train, y_train)
+model.prepare_inference(X_calib, y_calib)
+lower, upper, pred = model.predict_intervals(X_test, level=0.95)
+```
+
+See `docs/quickstart.md` and `docs/api.md` for the current public API.
+
 ## Status
 
 This package is currently a research preview. The scikit-learn histogram
