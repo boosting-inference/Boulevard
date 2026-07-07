@@ -12,7 +12,7 @@ from boulevard.estimators.lightgbm import LGBMRegressor
 
 
 def test_import_boulevard():
-    assert bd.__version__ == "0.0.1"
+    assert bd.__version__ == "0.1.0a1"
 
 
 def test_brat_d_hist_is_public_api():

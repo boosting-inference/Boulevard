@@ -79,7 +79,7 @@ jobs:
           import numpy as np
           import boulevard as bd
 
-          assert bd.__version__ == "0.0.1"
+          assert bd.__version__ == "0.1.0a1"
           assert hasattr(bd, "BRATDHistGradientBoostingRegressor")
           assert hasattr(bd, "BRATPHistGradientBoostingRegressor")
           assert hasattr(bd, "IEBMRegressor")

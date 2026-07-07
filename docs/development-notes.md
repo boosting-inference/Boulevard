@@ -24,11 +24,18 @@ on Python 3.10, 3.11, and 3.12.
 
 Remaining pre-release work is mostly packaging and release hygiene:
 
-- decide the first release version and tag policy;
 - optionally publish to TestPyPI before PyPI;
 - keep IEBM intervals marked experimental until more coverage diagnostics are
   run;
 - keep non-sklearn backends namespaced as development work.
+
+The first release version is `0.1.0a1`, meaning the first alpha of the `0.1`
+line. This is more informative than the internal placeholder `0.0.1`, but still
+signals that the package is not API-stable yet. The matching git tag should be
+`v0.1.0a1`, created after the TestPyPI artifact is built and smoke-tested. Patch
+releases should use `0.1.0a2`, `0.1.0a3`, or `0.1.1` depending on whether the
+release is still alpha-only or ready to become a normal patch release. New
+backend families or public API additions should advance the minor version.
 
 Source distributions intentionally include `tests/`. Wheels do not install the
 test suite, so ordinary `pip install boulevard-boosting` users receive only the
