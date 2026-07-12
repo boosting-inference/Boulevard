@@ -344,12 +344,34 @@ def test_brat_p_hist_intervals_smoke():
     ci_lower, ci_upper = model.confidence_interval(X_calib[:6])
     pi_lower, pi_upper = model.prediction_interval(X_calib[:6])
     ri_lower, ri_upper = model.reproduction_interval(X_calib[:6])
+    ci_lower_new, ci_upper_new, pred_new = model.predict_intervals(
+        X_calib[:6],
+        level=0.95,
+        mode="confidence",
+    )
+    pi_lower_new, pi_upper_new, _ = model.predict_intervals(
+        X_calib[:6],
+        level=0.95,
+        mode="prediction",
+    )
+    ri_lower_new, ri_upper_new, _ = model.predict_intervals(
+        X_calib[:6],
+        level=0.95,
+        mode="reproduction",
+    )
     norms = model.weight_norms(X_calib[:6])
 
     assert model.inference_method_ == "histogram_cell"
     assert model.sigma_hat2_ == pytest.approx(
         float(np.var(y_calib - model.predict(X_calib), ddof=1))
     )
+    np.testing.assert_allclose(ci_lower_new, ci_lower)
+    np.testing.assert_allclose(ci_upper_new, ci_upper)
+    np.testing.assert_allclose(pi_lower_new, pi_lower)
+    np.testing.assert_allclose(pi_upper_new, pi_upper)
+    np.testing.assert_allclose(ri_lower_new, ri_lower)
+    np.testing.assert_allclose(ri_upper_new, ri_upper)
+    np.testing.assert_allclose(pred_new, model.predict(X_calib[:6]))
     for lower, upper in [
         (ci_lower, ci_upper),
         (pi_lower, pi_upper),
@@ -362,6 +384,11 @@ def test_brat_p_hist_intervals_smoke():
     assert norms.shape == (6,)
     assert np.all(np.isfinite(norms))
     assert np.all(norms >= 0)
+
+    with pytest.raises(ValueError, match="mode must be"):
+        model.predict_intervals(X_calib[:2], mode="bad")
+    with pytest.raises(ValueError, match="calibrated=True"):
+        model.predict_intervals(X_calib[:2], mode="confidence", calibrated=True)
 
 
 def test_brat_p_hist_cell_system_uses_parallel_scaling():

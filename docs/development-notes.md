@@ -44,6 +44,36 @@ software because downstream users can verify the package against their local
 Python/scikit-learn environment, which matters here because the sklearn
 histogram estimators rely on private scikit-learn internals.
 
+## 2026-07-08: IEBM fit-time diagnostic and tree split optimization
+
+The IEBM visual diagnostic now benchmarks the rebuilt Boulevard IEBM against
+vanilla InterpretML EBM, not HGBR. This is the relevant comparator because both
+models are main-effect EBM-style additive estimators. The example also prints a
+matched tree-complexity table:
+
+```text
+setting, leaves, IEBM fit seconds, IEBM tree-update share, IEBM RMSE(signal), EBM fit seconds, EBM RMSE(signal)
+shallow,   2, 0.1611, 80.9%, 0.1742, 0.0317, 0.2854
+deep   , 128, 2.1758, 98.4%, 0.1185, 0.0338, 0.1129
+```
+
+The main bottleneck is the IEBM tree update, not Boulevard residual construction
+or binning. Before optimization, the deep diagnostic spent about `11.6s` in tree
+updates. A direct vectorized split-scan improved shallow trees but made the deep
+case slower because it still recomputed best splits for every existing segment
+after every split. The current implementation uses a heap-based greedy splitter:
+compute each segment's best split once, split the best segment, then only
+recompute the two child segments. This reduced the deep diagnostic fit time from
+about `11.6s` to about `2.2s` with unchanged RMSE.
+
+InterpretML EBM is still much faster because its tree update is implemented in
+native compiled code through `Booster.generate_term_update(...)`. The next
+possible speed target is an optional native InterpretML tree-update backend that
+keeps Boulevard residual construction and averaging while delegating only the
+one-dimensional split search and leaf-value update to InterpretML internals. That
+would improve speed but would add a private-API dependency, so the current
+pure-Python/NumPy implementation remains the safer default.
+
 ## 2026-06-23: Nyström sketching for histogram inference
 
 BRAT-D and BRAT-P histogram estimators now support optional Nyström sketching
@@ -364,4 +394,44 @@ The intended training semantics are:
 
 The first inference extension is observed-cell compression: use only observed multidimensional binned cells, build leaf blocks in cell-space, and compute the BRAT-D influence norm through a cell-count-weighted linear system instead of a full sample-space kernel. This is implemented in the experimental histogram class, but it should still be treated as provisional until we audit the residual-round denominator and compare the cell-space system against a small expanded sample-space calculation.
 
-## 2026-06-24: wrap intervals in an Interval() method, arguments specifying which type of intervals they want
+## 2026-06-24: unified interval mode API
+
+BRAT-D and BRAT-P now mirror the IEBM interval API:
+
+```python
+lower, upper, pred = model.predict_intervals(
+    X_test,
+    level=0.95,
+    mode="confidence",  # or "prediction", "reproduction"
+)
+```
+
+The older convenience methods remain supported:
+
+```python
+model.confidence_interval(X_test, alpha=0.05)
+model.prediction_interval(X_test, alpha=0.05)
+model.reproduction_interval(X_test, alpha=0.05)
+```
+
+Internally, these wrappers now call `predict_intervals`, so there is only one
+public interval dispatch path per BRAT estimator. Tests check that the new and
+legacy methods return the same bounds.
+
+A new combined example, `examples/boulevard_interval_api_demo.py`, fits BRAT-D,
+BRAT-P, and IEBM on the same synthetic additive problem. It prints:
+
+- fit time;
+- `prepare_inference` time;
+- prediction and interval query time;
+- RMSE against the known synthetic signal and noisy response;
+- confidence, prediction, and reproduction interval coverage;
+- interval width quantiles and weight-norm quantiles.
+
+The generated plot is a broad panel with:
+
+- BRAT-D confidence, prediction, and reproduction intervals on a one-dimensional
+  `x0` slice;
+- BRAT-P confidence, prediction, and reproduction intervals on the same slice;
+- IEBM feature-level confidence, prediction, and reproduction intervals for
+  each additive feature.

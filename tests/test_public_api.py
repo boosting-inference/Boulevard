@@ -95,12 +95,19 @@ def test_top_level_brat_d_user_workflow():
     model.prepare_inference(X[70:], y[70:])
 
     pred = model.predict(X[70:75])
-    ci_lower, ci_upper = model.confidence_interval(X[70:75])
-    pi_lower, pi_upper = model.prediction_interval(X[70:75])
+    ci_lower, ci_upper, ci_pred = model.predict_intervals(
+        X[70:75],
+        mode="confidence",
+    )
+    pi_lower, pi_upper, _ = model.predict_intervals(
+        X[70:75],
+        mode="prediction",
+    )
 
     assert pred.shape == (5,)
     assert ci_lower.shape == ci_upper.shape == pred.shape
     assert pi_lower.shape == pi_upper.shape == pred.shape
+    np.testing.assert_allclose(ci_pred, pred)
     assert np.all(np.isfinite(pred))
     assert np.all(ci_lower <= ci_upper)
     assert np.all(pi_lower <= pi_upper)
@@ -122,12 +129,19 @@ def test_top_level_brat_p_user_workflow():
     model.prepare_inference(X[70:], y[70:])
 
     pred = model.predict(X[70:75])
-    ci_lower, ci_upper = model.confidence_interval(X[70:75])
-    pi_lower, pi_upper = model.prediction_interval(X[70:75])
+    ci_lower, ci_upper, ci_pred = model.predict_intervals(
+        X[70:75],
+        mode="confidence",
+    )
+    pi_lower, pi_upper, _ = model.predict_intervals(
+        X[70:75],
+        mode="prediction",
+    )
 
     assert pred.shape == (5,)
     assert ci_lower.shape == ci_upper.shape == pred.shape
     assert pi_lower.shape == pi_upper.shape == pred.shape
+    np.testing.assert_allclose(ci_pred, pred)
     assert np.all(np.isfinite(pred))
     assert np.all(ci_lower <= ci_upper)
     assert np.all(pi_lower <= pi_upper)

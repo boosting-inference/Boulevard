@@ -8,6 +8,7 @@ one-dimensional binned tree updates.
 
 from __future__ import annotations
 
+import heapq
 import time
 from statistics import NormalDist
 from typing import Any
@@ -85,6 +86,7 @@ class IEBMRegressor(BaseEstimator, RegressorMixin):
         self.y_train_ = y.copy()
         self.interval_calibrations_ = {}
 
+        binning_start = time.perf_counter()
         self.bin_edges_ = self._fit_bin_edges(X)
         train_bins = self._bin_data(X)
         self.train_bins_ = train_bins
@@ -94,6 +96,7 @@ class IEBMRegressor(BaseEstimator, RegressorMixin):
             for feature_idx in range(n_features)
         ]
         self.bin_weights_ = self.bin_counts_
+        binning_seconds = time.perf_counter() - binning_start
         self.term_features_ = [(feature_idx,) for feature_idx in range(n_features)]
         self.term_names_ = list(self.feature_names_in_)
         self.term_scores_ = [
@@ -119,22 +122,34 @@ class IEBMRegressor(BaseEstimator, RegressorMixin):
         self.intercept_ = float(np.mean(y))
 
         sampled_rows = 0
+        contribution_seconds = 0.0
+        residual_seconds = 0.0
+        sampling_seconds = 0.0
+        tree_update_seconds = 0.0
+        structure_seconds = 0.0
+        score_update_seconds = 0.0
+        intercept_seconds = 0.0
         for round_idx in range(1, self.max_rounds + 1):
+            contribution_start = time.perf_counter()
             old_scores = [scores.copy() for scores in self.term_scores_]
             old_contributions = self._contributions_from_bins(train_bins, old_scores)
+            contribution_seconds += time.perf_counter() - contribution_start
             new_scores = []
             new_warm_scores = []
             new_avg_scores = []
             coeff = (round_idx - 1.0) / round_idx
 
             for feature_idx in range(n_features):
+                residual_start = time.perf_counter()
                 feature_bins = train_bins[:, feature_idx]
                 feature_contribution = old_scores[feature_idx][feature_bins]
                 prediction = self.intercept_ + old_contributions
                 if self.leave_one_out:
                     prediction = prediction - feature_contribution
                 residual = y - prediction
+                residual_seconds += time.perf_counter() - residual_start
 
+                sampling_start = time.perf_counter()
                 if self.subsample_rate < 1.0:
                     in_bag = rng.random(n_samples) < self.subsample_rate
                     if not np.any(in_bag):
@@ -142,7 +157,9 @@ class IEBMRegressor(BaseEstimator, RegressorMixin):
                 else:
                     in_bag = np.ones(n_samples, dtype=bool)
                 sampled_rows += int(np.sum(in_bag))
+                sampling_seconds += time.perf_counter() - sampling_start
 
+                tree_update_start = time.perf_counter()
                 update, structure_delta = self._fit_binned_tree_update(
                     feature_bins=feature_bins,
                     residual=residual,
@@ -150,8 +167,14 @@ class IEBMRegressor(BaseEstimator, RegressorMixin):
                     n_bins=self.n_bins_[feature_idx],
                     full_bin_counts=self.bin_counts_[feature_idx],
                 )
+                tree_update_seconds += time.perf_counter() - tree_update_start
+
+                structure_start = time.perf_counter()
                 self.structure_sums_[feature_idx] += structure_delta
                 self.structure_update_counts_[feature_idx] += 1
+                structure_seconds += time.perf_counter() - structure_start
+
+                score_update_start = time.perf_counter()
                 mean_update = float(
                     np.dot(self.bin_counts_[feature_idx], update) / n_samples
                 )
@@ -178,13 +201,19 @@ class IEBMRegressor(BaseEstimator, RegressorMixin):
                 new_warm_scores.append(new_warm)
                 new_avg_scores.append(new_avg)
                 new_scores.append(new_warm + new_avg)
+                score_update_seconds += time.perf_counter() - score_update_start
 
             warm_scores = new_warm_scores
             avg_scores = new_avg_scores
             self.term_scores_ = new_scores
+            contribution_start = time.perf_counter()
             contributions = self._contributions_from_bins(train_bins, self.term_scores_)
+            contribution_seconds += time.perf_counter() - contribution_start
+            intercept_start = time.perf_counter()
             self.intercept_ = float(np.mean(y - contributions))
+            intercept_seconds += time.perf_counter() - intercept_start
 
+        finalization_start = time.perf_counter()
         if self.leave_one_out:
             self.boulevard_scale_ = 1.0
         else:
@@ -202,8 +231,18 @@ class IEBMRegressor(BaseEstimator, RegressorMixin):
         self.sigma_ = (
             float(np.std(residuals, ddof=1)) if residuals.shape[0] > 1 else 0.0
         )
+        finalization_seconds = time.perf_counter() - finalization_start
         self.fit_diagnostics_ = {
             "total_seconds": time.perf_counter() - fit_start,
+            "binning_seconds": binning_seconds,
+            "contribution_seconds": contribution_seconds,
+            "residual_seconds": residual_seconds,
+            "sampling_seconds": sampling_seconds,
+            "tree_update_seconds": tree_update_seconds,
+            "structure_seconds": structure_seconds,
+            "score_update_seconds": score_update_seconds,
+            "intercept_seconds": intercept_seconds,
+            "finalization_seconds": finalization_seconds,
             "n_features": n_features,
             "total_bins": int(np.sum(self.n_bins_)),
             "max_rounds": self.max_rounds,
@@ -705,54 +744,89 @@ class IEBMRegressor(BaseEstimator, RegressorMixin):
         sums_sq: np.ndarray,
     ) -> list[tuple[int, int]]:
         n_bins = counts.shape[0]
-        segments = [(0, n_bins)]
         prefix_counts = np.r_[0.0, np.cumsum(counts)]
         prefix_sums = np.r_[0.0, np.cumsum(sums)]
         prefix_sums_sq = np.r_[0.0, np.cumsum(sums_sq)]
-
-        def stats(start: int, stop: int) -> tuple[float, float, float]:
-            return (
-                float(prefix_counts[stop] - prefix_counts[start]),
-                float(prefix_sums[stop] - prefix_sums[start]),
-                float(prefix_sums_sq[stop] - prefix_sums_sq[start]),
-            )
 
         def sse(count: float, total: float, total_sq: float) -> float:
             if count <= 0:
                 return 0.0
             return max(total_sq - (total * total) / count, 0.0)
 
-        while len(segments) < self.max_leaves_:
-            best: tuple[float, int, int] | None = None
-            for segment_idx, (start, stop) in enumerate(segments):
-                parent_count, parent_sum, parent_sum_sq = stats(start, stop)
-                if parent_count < 2 * self.min_samples_leaf:
-                    continue
-                parent_sse = sse(parent_count, parent_sum, parent_sum_sq)
-                for split in range(start + 1, stop):
-                    left_count, left_sum, left_sum_sq = stats(start, split)
-                    right_count, right_sum, right_sum_sq = stats(split, stop)
-                    if (
-                        left_count < self.min_samples_leaf
-                        or right_count < self.min_samples_leaf
-                    ):
-                        continue
-                    gain = parent_sse - sse(left_count, left_sum, left_sum_sq) - sse(
-                        right_count,
-                        right_sum,
-                        right_sum_sq,
-                    )
-                    if best is None or gain > best[0]:
-                        best = (gain, segment_idx, split)
+        def best_split(start: int, stop: int) -> tuple[float, int] | None:
+            parent_count = float(prefix_counts[stop] - prefix_counts[start])
+            if parent_count < 2 * self.min_samples_leaf:
+                return None
+            parent_sum = float(prefix_sums[stop] - prefix_sums[start])
+            parent_sum_sq = float(prefix_sums_sq[stop] - prefix_sums_sq[start])
+            parent_sse = sse(parent_count, parent_sum, parent_sum_sq)
+            splits = np.arange(start + 1, stop, dtype=int)
+            if splits.size == 0:
+                return None
 
-            if best is None or best[0] <= 1e-12:
+            left_counts = prefix_counts[splits] - prefix_counts[start]
+            right_counts = prefix_counts[stop] - prefix_counts[splits]
+            valid = (left_counts >= self.min_samples_leaf) & (
+                right_counts >= self.min_samples_leaf
+            )
+            if not np.any(valid):
+                return None
+
+            valid_splits = splits[valid]
+            left_counts = left_counts[valid]
+            right_counts = right_counts[valid]
+            left_sums = prefix_sums[valid_splits] - prefix_sums[start]
+            right_sums = prefix_sums[stop] - prefix_sums[valid_splits]
+            left_sums_sq = prefix_sums_sq[valid_splits] - prefix_sums_sq[start]
+            right_sums_sq = prefix_sums_sq[stop] - prefix_sums_sq[valid_splits]
+
+            left_sse = np.maximum(
+                left_sums_sq - (left_sums * left_sums) / left_counts,
+                0.0,
+            )
+            right_sse = np.maximum(
+                right_sums_sq - (right_sums * right_sums) / right_counts,
+                0.0,
+            )
+            gains = parent_sse - left_sse - right_sse
+            local_best_idx = int(np.argmax(gains))
+            gain = float(gains[local_best_idx])
+            if gain <= 1e-12:
+                return None
+            return gain, int(valid_splits[local_best_idx])
+
+        leaves: dict[int, tuple[int, int]] = {0: (0, n_bins)}
+        next_leaf_id = 1
+        heap: list[tuple[float, int, int, int, int]] = []
+        initial = best_split(0, n_bins)
+        if initial is not None:
+            gain, split = initial
+            heapq.heappush(heap, (-gain, 0, split, n_bins, 0))
+
+        while len(leaves) < self.max_leaves_ and heap:
+            neg_gain, start, split, stop, leaf_id = heapq.heappop(heap)
+            if leaf_id not in leaves or leaves[leaf_id] != (start, stop):
+                continue
+            if -neg_gain <= 1e-12:
                 break
 
-            _, segment_idx, split = best
-            start, stop = segments[segment_idx]
-            segments[segment_idx : segment_idx + 1] = [(start, split), (split, stop)]
+            del leaves[leaf_id]
+            left_id = next_leaf_id
+            right_id = next_leaf_id + 1
+            next_leaf_id += 2
+            leaves[left_id] = (start, split)
+            leaves[right_id] = (split, stop)
 
-        return segments
+            left_best = best_split(start, split)
+            if left_best is not None:
+                gain, child_split = left_best
+                heapq.heappush(heap, (-gain, start, child_split, split, left_id))
+            right_best = best_split(split, stop)
+            if right_best is not None:
+                gain, child_split = right_best
+                heapq.heappush(heap, (-gain, split, child_split, stop, right_id))
+
+        return sorted(leaves.values(), key=lambda segment: segment[0])
 
     @staticmethod
     def _contributions_from_bins(

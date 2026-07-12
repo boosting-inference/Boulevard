@@ -25,7 +25,11 @@ recommended explicit workflow is:
 ```python
 model.fit(X_train, y_train)
 model.prepare_inference(X_calib, y_calib)
-lower, upper = model.confidence_interval(X_test, alpha=0.05)
+lower, upper, pred = model.predict_intervals(
+    X_test,
+    level=0.95,
+    mode="confidence",
+)
 ```
 
 `prepare_inference` does two things:
@@ -40,9 +44,10 @@ For one-off BRAT-D or BRAT-P interval calls, calibration data can also be
 passed directly:
 
 ```python
-lower, upper = model.confidence_interval(
+lower, upper, pred = model.predict_intervals(
     X_test,
-    alpha=0.05,
+    level=0.95,
+    mode="confidence",
     X_calib=X_calib,
     y_calib=y_calib,
 )
@@ -76,9 +81,21 @@ model.fit(X_train, y_train)
 model.prepare_inference(X_calib, y_calib)
 
 pred = model.predict(X_test)
-ci_lower, ci_upper = model.confidence_interval(X_test, alpha=0.05)
-pi_lower, pi_upper = model.prediction_interval(X_test, alpha=0.05)
-ri_lower, ri_upper = model.reproduction_interval(X_test, alpha=0.05)
+ci_lower, ci_upper, _ = model.predict_intervals(
+    X_test,
+    level=0.95,
+    mode="confidence",
+)
+pi_lower, pi_upper, _ = model.predict_intervals(
+    X_test,
+    level=0.95,
+    mode="prediction",
+)
+ri_lower, ri_upper, _ = model.predict_intervals(
+    X_test,
+    level=0.95,
+    mode="reproduction",
+)
 norms = model.weight_norms(X_test)
 ```
 
@@ -146,9 +163,21 @@ model.fit(X_train, y_train)
 model.prepare_inference(X_calib, y_calib)
 
 pred = model.predict(X_test)
-ci_lower, ci_upper = model.confidence_interval(X_test, alpha=0.05)
-pi_lower, pi_upper = model.prediction_interval(X_test, alpha=0.05)
-ri_lower, ri_upper = model.reproduction_interval(X_test, alpha=0.05)
+ci_lower, ci_upper, _ = model.predict_intervals(
+    X_test,
+    level=0.95,
+    mode="confidence",
+)
+pi_lower, pi_upper, _ = model.predict_intervals(
+    X_test,
+    level=0.95,
+    mode="prediction",
+)
+ri_lower, ri_upper, _ = model.predict_intervals(
+    X_test,
+    level=0.95,
+    mode="reproduction",
+)
 norms = model.weight_norms(X_test)
 ```
 

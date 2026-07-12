@@ -7,7 +7,8 @@ Run from the repository root with:
 This example uses a synthetic additive three-feature regression function.  The
 top row shows IEBM partial dependence curves with experimental confidence bands.
 Coverage is available here only because the synthetic data-generating function
-is known.
+is known. If InterpretML is installed, the script also reports a vanilla EBM
+main-effect baseline for fit-time and RMSE comparison.
 """
 
 from __future__ import annotations
@@ -19,11 +20,17 @@ import time
 from collections.abc import Sequence
 
 import numpy as np
-from sklearn.ensemble import HistGradientBoostingRegressor
 from sklearn.metrics import mean_squared_error
 from sklearn.model_selection import train_test_split
 
 import boulevard as bd
+
+try:
+    from interpret.glassbox import (
+        ExplainableBoostingRegressor as InterpretEBMRegressor,
+    )
+except ImportError:  # pragma: no cover - optional example dependency
+    InterpretEBMRegressor = None
 
 
 def _coverage(target: np.ndarray, lower: np.ndarray, upper: np.ndarray) -> float:
@@ -80,6 +87,124 @@ def _component_grid(feature_idx: int, values: np.ndarray) -> np.ndarray:
     if feature_idx == 2:
         return 0.45 * np.sin(4 * np.pi * values)
     raise ValueError("feature_idx is out of range.")
+
+
+def _make_interpret_ebm(*, max_leaves: int) -> object | None:
+    if InterpretEBMRegressor is None:
+        return None
+
+    params = {
+        "interactions": 0,
+        "max_bins": 128,
+        "outer_bags": 1,
+        "validation_size": 0,
+        "learning_rate": 0.1,
+        "max_rounds": 160,
+        "max_leaves": max_leaves,
+        "min_samples_leaf": 10,
+        "n_jobs": 1,
+        "random_state": 0,
+    }
+    try:
+        return InterpretEBMRegressor(**params)
+    except TypeError:
+        fallback = {
+            "interactions": 0,
+            "max_bins": 128,
+            "learning_rate": 0.1,
+            "max_rounds": 160,
+            "max_leaves": max_leaves,
+            "n_jobs": 1,
+            "random_state": 0,
+        }
+        return InterpretEBMRegressor(**fallback)
+
+
+def _fit_iebm_for_benchmark(
+    *,
+    X_train: np.ndarray,
+    y_train: np.ndarray,
+    max_depth: int,
+) -> tuple[bd.IEBMRegressor, float]:
+    model = bd.IEBMRegressor(
+        max_rounds=160,
+        max_bins=128,
+        learning_rate=1.0,
+        subsample_rate=0.8,
+        warmup_rounds=20,
+        truncation=10.0,
+        max_depth=max_depth,
+        min_samples_leaf=10,
+        random_state=0,
+    )
+    fit_start = time.perf_counter()
+    model.fit(X_train, y_train)
+    return model, time.perf_counter() - fit_start
+
+
+def _run_tree_complexity_benchmark(
+    *,
+    X_train: np.ndarray,
+    y_train: np.ndarray,
+    X_test: np.ndarray,
+    signal_test: np.ndarray,
+    deep_iebm: bd.IEBMRegressor,
+    deep_iebm_fit_seconds: float,
+    deep_iebm_test_pred: np.ndarray,
+) -> None:
+    configs = [
+        ("shallow", 1, 2),
+        ("deep", 7, 128),
+    ]
+
+    print("")
+    print("Matched tree-complexity benchmark")
+    print(
+        "  columns: setting, leaves, IEBM fit seconds, IEBM tree-update share, "
+        "IEBM RMSE(signal), EBM fit seconds, EBM RMSE(signal)"
+    )
+
+    for name, max_depth, max_leaves in configs:
+        if max_leaves == deep_iebm.max_leaves_:
+            iebm_model = deep_iebm
+            iebm_fit_seconds = deep_iebm_fit_seconds
+            iebm_pred = deep_iebm_test_pred
+        else:
+            iebm_model, iebm_fit_seconds = _fit_iebm_for_benchmark(
+                X_train=X_train,
+                y_train=y_train,
+                max_depth=max_depth,
+            )
+            iebm_pred = iebm_model.predict(X_test)
+
+        fit_diag = iebm_model.fit_diagnostics_
+        tree_update_share = (
+            fit_diag["tree_update_seconds"] / fit_diag["total_seconds"]
+            if fit_diag["total_seconds"] > 0
+            else 0.0
+        )
+
+        ebm_fit_text = "skipped"
+        ebm_rmse_text = "skipped"
+        interpret_ebm = _make_interpret_ebm(max_leaves=max_leaves)
+        if interpret_ebm is not None:
+            fit_start = time.perf_counter()
+            interpret_ebm.fit(X_train, y_train)
+            ebm_fit_seconds = time.perf_counter() - fit_start
+            ebm_pred = interpret_ebm.predict(X_test)
+            ebm_fit_text = f"{ebm_fit_seconds:.4f}"
+            ebm_rmse_text = f"{_rmse(signal_test, ebm_pred):.4f}"
+
+        print(
+            "  "
+            f"{name:<7}, "
+            f"{max_leaves:>3}, "
+            f"{iebm_fit_seconds:.4f}, "
+            f"{100.0 * tree_update_share:.1f}%, "
+            f"{_rmse(signal_test, iebm_pred):.4f}, "
+            f"{ebm_fit_text}, "
+            f"{ebm_rmse_text}"
+        )
 
 
 def _run_iebm_sweep(
@@ -209,6 +334,8 @@ def main() -> None:
         random_state=1,
     )
 
+    main_max_depth = 7
+    main_max_leaves = 2**main_max_depth
     iebm = bd.IEBMRegressor(
         max_rounds=160,
         max_bins=128,
@@ -216,28 +343,22 @@ def main() -> None:
         subsample_rate=0.8,
         warmup_rounds=20,
         truncation=10.0,
-        max_depth=7,
+        max_depth=main_max_depth,
         min_samples_leaf=10,
         random_state=0,
     )
-    hgb = HistGradientBoostingRegressor(
-        loss="squared_error",
-        max_iter=160,
-        learning_rate=0.08,
-        max_leaf_nodes=31,
-        min_samples_leaf=10,
-        max_bins=255,
-        early_stopping=False,
-        random_state=0,
-    )
+    interpret_ebm = _make_interpret_ebm(max_leaves=main_max_leaves)
 
     fit_start = time.perf_counter()
     iebm.fit(X_train, y_train)
     iebm_fit_seconds = time.perf_counter() - fit_start
 
-    fit_start = time.perf_counter()
-    hgb.fit(X_train, y_train)
-    hgb_fit_seconds = time.perf_counter() - fit_start
+    if interpret_ebm is not None:
+        fit_start = time.perf_counter()
+        interpret_ebm.fit(X_train, y_train)
+        interpret_ebm_fit_seconds = time.perf_counter() - fit_start
+    else:
+        interpret_ebm_fit_seconds = None
 
     inference_start = time.perf_counter()
     iebm.prepare_inference(X_calib, y_calib)
@@ -261,9 +382,13 @@ def main() -> None:
     )
     iebm_interval_seconds = time.perf_counter() - pred_start
 
-    pred_start = time.perf_counter()
-    hgb_test_pred = hgb.predict(X_test)
-    hgb_test_pred_seconds = time.perf_counter() - pred_start
+    if interpret_ebm is not None:
+        pred_start = time.perf_counter()
+        interpret_ebm_test_pred = interpret_ebm.predict(X_test)
+        interpret_ebm_test_pred_seconds = time.perf_counter() - pred_start
+    else:
+        interpret_ebm_test_pred = None
+        interpret_ebm_test_pred_seconds = None
 
     norm_start = time.perf_counter()
     test_norms = iebm.weight_norms(X_test)
@@ -273,7 +398,10 @@ def main() -> None:
     calib_residuals = y_calib - iebm_calib_pred
     test_residuals = y_test - iebm_test_pred
     test_abs_signal_error = np.abs(iebm_test_pred - signal_test)
-    hgb_test_abs_signal_error = np.abs(hgb_test_pred - signal_test)
+    if interpret_ebm_test_pred is not None:
+        ebm_test_abs_signal_error = np.abs(interpret_ebm_test_pred - signal_test)
+    else:
+        ebm_test_abs_signal_error = None
     ci_width = ci_upper - ci_lower
     bin_counts = np.concatenate(iebm.bin_counts_)
     occupied_bins = int(np.count_nonzero(bin_counts))
@@ -336,10 +464,20 @@ def main() -> None:
             ax.legend(loc="lower left", fontsize=8)
 
     ax_pred.scatter(signal_test, iebm_test_pred, s=12, alpha=0.35, label="IEBM")
-    ax_pred.scatter(signal_test, hgb_test_pred, s=12, alpha=0.25, label="HGBR")
+    if interpret_ebm_test_pred is not None:
+        ax_pred.scatter(
+            signal_test,
+            interpret_ebm_test_pred,
+            s=12,
+            alpha=0.25,
+            label="InterpretML EBM",
+        )
+    prediction_arrays = [signal_test, iebm_test_pred]
+    if interpret_ebm_test_pred is not None:
+        prediction_arrays.append(interpret_ebm_test_pred)
     lims = [
-        min(np.min(signal_test), np.min(iebm_test_pred), np.min(hgb_test_pred)),
-        max(np.max(signal_test), np.max(iebm_test_pred), np.max(hgb_test_pred)),
+        min(float(np.min(values)) for values in prediction_arrays),
+        max(float(np.max(values)) for values in prediction_arrays),
     ]
     ax_pred.plot(lims, lims, color="black", linewidth=1)
     ax_pred.set_title("Predicted vs true signal")
@@ -377,6 +515,14 @@ def main() -> None:
     fig.tight_layout(rect=[0, 0, 1, 0.96])
 
     partial_coverages = [result[4] for result in partial_results]
+    fit_diag = iebm.fit_diagnostics_
+    fit_total = float(fit_diag["total_seconds"])
+
+    def _fit_timing_line(label: str, key: str) -> str:
+        seconds = float(fit_diag[key])
+        share = seconds / fit_total if fit_total > 0 else 0.0
+        return f"  {label}: {seconds:.4f}s ({100.0 * share:.1f}%)"
+
     print("IEBM multivariate visual diagnostic")
     print(
         "train/calib/test sizes: "
@@ -384,23 +530,49 @@ def main() -> None:
     )
     print("top-row bands use predict_feature_intervals(..., mode='confidence')")
     print(f"IEBM fit seconds: {iebm_fit_seconds:.4f}")
+    print("IEBM fit timing breakdown:")
+    print(_fit_timing_line("binning", "binning_seconds"))
+    print(_fit_timing_line("contribution", "contribution_seconds"))
+    print(_fit_timing_line("residual", "residual_seconds"))
+    print(_fit_timing_line("sampling", "sampling_seconds"))
+    print(_fit_timing_line("tree update", "tree_update_seconds"))
+    print(_fit_timing_line("structure", "structure_seconds"))
+    print(_fit_timing_line("score update", "score_update_seconds"))
+    print(_fit_timing_line("intercept", "intercept_seconds"))
+    print(_fit_timing_line("finalization", "finalization_seconds"))
     print(f"IEBM inference prep seconds: {inference_seconds:.4f}")
     print(f"IEBM test prediction seconds: {iebm_test_pred_seconds:.4f}")
     print(f"IEBM interval seconds: {iebm_interval_seconds:.4f}")
     print(f"IEBM test weight-norm seconds: {test_norm_seconds:.4f}")
-    print(f"HGBR fit seconds: {hgb_fit_seconds:.4f}")
-    print(f"HGBR test prediction seconds: {hgb_test_pred_seconds:.4f}")
+    if interpret_ebm is not None:
+        print(f"InterpretML EBM fit seconds: {interpret_ebm_fit_seconds:.4f}")
+        print(
+            "InterpretML EBM test prediction seconds: "
+            f"{interpret_ebm_test_pred_seconds:.4f}"
+        )
+    else:
+        print(
+            "InterpretML EBM baseline skipped: install the 'interpretml' extra "
+            "to enable it."
+        )
     print(f"IEBM test RMSE vs signal: {_rmse(signal_test, iebm_test_pred):.4f}")
     print(f"IEBM test RMSE vs y: {_rmse(y_test, iebm_test_pred):.4f}")
-    print(f"HGBR test RMSE vs signal: {_rmse(signal_test, hgb_test_pred):.4f}")
-    print(f"HGBR test RMSE vs y: {_rmse(y_test, hgb_test_pred):.4f}")
+    if interpret_ebm_test_pred is not None:
+        print(
+            "InterpretML EBM test RMSE vs signal: "
+            f"{_rmse(signal_test, interpret_ebm_test_pred):.4f}"
+        )
+        print(
+            "InterpretML EBM test RMSE vs y: "
+            f"{_rmse(y_test, interpret_ebm_test_pred):.4f}"
+        )
     print(f"true noise variance: {noise_std**2:.6f}")
     print(f"sigma_hat2: {iebm.sigma_hat2_:.6f}")
     print(f"fit sigma: {iebm.sigma_:.6f}")
     print(_residual_summary("train", train_residuals))
     print(_residual_summary("calib", calib_residuals))
     print(_residual_summary("test", test_residuals))
-    print(f"total bins: {iebm.fit_diagnostics_['total_bins']}")
+    print(f"total bins: {fit_diag['total_bins']}")
     print(
         "occupied bins / total bins: "
         f"{occupied_bins}/{bin_counts.shape[0]}"
@@ -413,7 +585,7 @@ def main() -> None:
         f"{np.max(bin_counts):.1f}"
     )
     print(f"term score ranges: {_term_range_summary(iebm.term_scores_)}")
-    print(f"structure updates: {iebm.fit_diagnostics_['structure_updates']}")
+    print(f"structure updates: {fit_diag['structure_updates']}")
     print(
         "empty training bins: "
         f"{iebm.inference_diagnostics_['empty_training_bins']}"
@@ -423,10 +595,11 @@ def main() -> None:
         "IEBM abs signal error quantiles: "
         f"{_format_quantiles(test_abs_signal_error)}"
     )
-    print(
-        "HGBR abs signal error quantiles: "
-        f"{_format_quantiles(hgb_test_abs_signal_error)}"
-    )
+    if ebm_test_abs_signal_error is not None:
+        print(
+            "InterpretML EBM abs signal error quantiles: "
+            f"{_format_quantiles(ebm_test_abs_signal_error)}"
+        )
     print(f"full CI width quantiles: {_format_quantiles(ci_width)}")
     print(
         "partial confidence coverage x0/x1/x2: "
@@ -441,6 +614,15 @@ def main() -> None:
     print(
         "prediction interval coverage on noisy y: "
         f"{_coverage(y_test, pi_lower, pi_upper):.3f}"
+    )
+    _run_tree_complexity_benchmark(
+        X_train=X_train,
+        y_train=y_train,
+        X_test=X_test,
+        signal_test=signal_test,
+        deep_iebm=iebm,
+        deep_iebm_fit_seconds=iebm_fit_seconds,
+        deep_iebm_test_pred=iebm_test_pred,
     )
 
     if not args.skip_sweep:

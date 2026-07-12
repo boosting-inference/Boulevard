@@ -95,13 +95,29 @@ def _fit_interval_model(
     test_prediction_seconds = time.perf_counter() - prediction_start
 
     interval_start = time.perf_counter()
-    grid_ci_lower, grid_ci_upper = model.confidence_interval(X_grid, alpha=0.05)
-    grid_pi_lower, grid_pi_upper = model.prediction_interval(X_grid, alpha=0.05)
+    grid_ci_lower, grid_ci_upper, _ = model.predict_intervals(
+        X_grid,
+        level=0.95,
+        mode="confidence",
+    )
+    grid_pi_lower, grid_pi_upper, _ = model.predict_intervals(
+        X_grid,
+        level=0.95,
+        mode="prediction",
+    )
     grid_interval_seconds = time.perf_counter() - interval_start
 
     interval_start = time.perf_counter()
-    test_ci_lower, test_ci_upper = model.confidence_interval(X_test, alpha=0.05)
-    test_pi_lower, test_pi_upper = model.prediction_interval(X_test, alpha=0.05)
+    test_ci_lower, test_ci_upper, _ = model.predict_intervals(
+        X_test,
+        level=0.95,
+        mode="confidence",
+    )
+    test_pi_lower, test_pi_upper, _ = model.predict_intervals(
+        X_test,
+        level=0.95,
+        mode="prediction",
+    )
     test_interval_seconds = time.perf_counter() - interval_start
 
     norm_start = time.perf_counter()

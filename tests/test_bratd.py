@@ -458,14 +458,41 @@ def test_brat_d_hist_interval_widths_are_ordered():
     ci_lower, ci_upper = model.confidence_interval(X_calib[:8])
     pi_lower, pi_upper = model.prediction_interval(X_calib[:8])
     ri_lower, ri_upper = model.reproduction_interval(X_calib[:8])
+    ci_lower_new, ci_upper_new, pred_new = model.predict_intervals(
+        X_calib[:8],
+        level=0.95,
+        mode="confidence",
+    )
+    pi_lower_new, pi_upper_new, _ = model.predict_intervals(
+        X_calib[:8],
+        level=0.95,
+        mode="prediction",
+    )
+    ri_lower_new, ri_upper_new, _ = model.predict_intervals(
+        X_calib[:8],
+        level=0.95,
+        mode="reproduction",
+    )
 
     ci_width = ci_upper - ci_lower
     pi_width = pi_upper - pi_lower
     ri_width = ri_upper - ri_lower
 
+    np.testing.assert_allclose(ci_lower_new, ci_lower)
+    np.testing.assert_allclose(ci_upper_new, ci_upper)
+    np.testing.assert_allclose(pi_lower_new, pi_lower)
+    np.testing.assert_allclose(pi_upper_new, pi_upper)
+    np.testing.assert_allclose(ri_lower_new, ri_lower)
+    np.testing.assert_allclose(ri_upper_new, ri_upper)
+    np.testing.assert_allclose(pred_new, model.predict(X_calib[:8]))
     assert np.all(ci_width > 0)
     assert np.all(pi_width >= ci_width)
     np.testing.assert_allclose(ri_width, np.sqrt(2) * ci_width)
+
+    with pytest.raises(ValueError, match="mode must be"):
+        model.predict_intervals(X_calib[:2], mode="bad")
+    with pytest.raises(ValueError, match="calibrated=True"):
+        model.predict_intervals(X_calib[:2], mode="confidence", calibrated=True)
 
 
 def test_brat_d_hist_observed_cell_inference_smoke():

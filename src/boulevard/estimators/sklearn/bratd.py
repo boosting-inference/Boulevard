@@ -344,12 +344,74 @@ class BRATDHistGradientBoostingRegressor(HistGradientBoostingRegressor):
         """Return asymptotic prediction intervals."""
         if method != "asymptotic":
             raise ValueError("Only method='asymptotic' is implemented for BRAT-D hist.")
-        return self.prediction_interval(
+        lower, upper, _ = self.predict_intervals(
             X,
-            alpha=0.05 if alpha is None else alpha,
+            level=1.0 - (0.05 if alpha is None else alpha),
+            mode="prediction",
             X_calib=X_calib,
             y_calib=y_calib,
         )
+        return lower, upper
+
+    def predict_intervals(
+        self,
+        X: Any,
+        level: float = 0.95,
+        mode: str = "prediction",
+        calibrated: bool = False,
+        X_calib: Any | None = None,
+        y_calib: Any | None = None,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Return BRAT-D intervals and point predictions.
+
+        Parameters
+        ----------
+        X:
+            Query rows.
+        level:
+            Interval coverage level. ``level=0.95`` is equivalent to the older
+            ``alpha=0.05`` interval methods.
+        mode:
+            ``"confidence"`` for signal intervals, ``"prediction"`` for noisy
+            response intervals, or ``"reproduction"`` for repeated-fit signal
+            intervals.
+        calibrated:
+            Apply held-out conformal-style scaling to prediction intervals.
+        X_calib, y_calib:
+            Optional variance-estimation data. If omitted, training residuals
+            are used.
+        """
+        if not 0 < level < 1:
+            raise ValueError("level must be in (0, 1).")
+        if mode not in {"confidence", "prediction", "reproduction"}:
+            raise ValueError(
+                "mode must be 'confidence', 'prediction', or 'reproduction'."
+            )
+        if calibrated and mode != "prediction":
+            raise ValueError("calibrated=True is only supported for mode='prediction'.")
+
+        self._ensure_inference_prepared(X_calib=X_calib, y_calib=y_calib)
+        alpha = 1.0 - level
+        center = self.predict(X)
+        r_norm = self._weight_norms(X)
+        q = 1 - self.dropout_rate
+        scale = (1 + self.learning_rate * q) / self.learning_rate
+
+        if mode == "confidence":
+            se = scale * np.sqrt(self.sigma_hat2_) * r_norm
+            interval = normal_interval(center, se, alpha=alpha)
+            return interval.lower, interval.upper, center
+
+        if mode == "prediction":
+            se = np.sqrt(self.sigma_hat2_ * (1 + (scale * r_norm) ** 2))
+            half_width = normal_quantile(alpha) * se
+            if calibrated:
+                half_width *= self._prediction_calibration_scale(alpha=alpha)
+            return center - half_width, center + half_width, center
+
+        se = np.sqrt(2) * scale * np.sqrt(self.sigma_hat2_) * r_norm
+        interval = normal_interval(center, se, alpha=alpha)
+        return interval.lower, interval.upper, center
 
     def confidence_interval(
         self,
@@ -359,14 +421,14 @@ class BRATDHistGradientBoostingRegressor(HistGradientBoostingRegressor):
         y_calib: Any | None = None,
     ) -> tuple[np.ndarray, np.ndarray]:
         """Return observed-cell asymptotic confidence intervals for ``f(x)``."""
-        self._ensure_inference_prepared(X_calib=X_calib, y_calib=y_calib)
-        center = self.predict(X)
-        r_norm = self._weight_norms(X)
-        q = 1 - self.dropout_rate
-        scale = (1 + self.learning_rate * q) / self.learning_rate
-        se = scale * np.sqrt(self.sigma_hat2_) * r_norm
-        interval = normal_interval(center, se, alpha=alpha)
-        return interval.lower, interval.upper
+        lower, upper, _ = self.predict_intervals(
+            X,
+            level=1.0 - alpha,
+            mode="confidence",
+            X_calib=X_calib,
+            y_calib=y_calib,
+        )
+        return lower, upper
 
     def prediction_interval(
         self,
@@ -377,12 +439,15 @@ class BRATDHistGradientBoostingRegressor(HistGradientBoostingRegressor):
         y_calib: Any | None = None,
     ) -> tuple[np.ndarray, np.ndarray]:
         """Return observed-cell asymptotic prediction intervals for ``y | x``."""
-        self._ensure_inference_prepared(X_calib=X_calib, y_calib=y_calib)
-        center = self.predict(X)
-        half_width = self._prediction_half_width(X, alpha=alpha)
-        if calibrated:
-            half_width *= self._prediction_calibration_scale(alpha=alpha)
-        return center - half_width, center + half_width
+        lower, upper, _ = self.predict_intervals(
+            X,
+            level=1.0 - alpha,
+            mode="prediction",
+            calibrated=calibrated,
+            X_calib=X_calib,
+            y_calib=y_calib,
+        )
+        return lower, upper
 
     def reproduction_interval(
         self,
@@ -392,14 +457,14 @@ class BRATDHistGradientBoostingRegressor(HistGradientBoostingRegressor):
         y_calib: Any | None = None,
     ) -> tuple[np.ndarray, np.ndarray]:
         """Return observed-cell asymptotic reproduction intervals."""
-        self._ensure_inference_prepared(X_calib=X_calib, y_calib=y_calib)
-        center = self.predict(X)
-        r_norm = self._weight_norms(X)
-        q = 1 - self.dropout_rate
-        scale = (1 + self.learning_rate * q) / self.learning_rate
-        se = np.sqrt(2) * scale * np.sqrt(self.sigma_hat2_) * r_norm
-        interval = normal_interval(center, se, alpha=alpha)
-        return interval.lower, interval.upper
+        lower, upper, _ = self.predict_intervals(
+            X,
+            level=1.0 - alpha,
+            mode="reproduction",
+            X_calib=X_calib,
+            y_calib=y_calib,
+        )
+        return lower, upper
 
     def weight_norms(self, X: Any) -> np.ndarray:
         """Return observed-cell BRAT-D weight norms used by intervals."""

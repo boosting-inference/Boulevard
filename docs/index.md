@@ -54,8 +54,10 @@ The recommended workflow is:
 model.fit(X_train, y_train)
 model.prepare_inference(X_calib, y_calib)
 
-pred = model.predict(X_test)
-lower, upper = model.confidence_interval(X_test)
+lower, upper, pred = model.predict_intervals(
+    X_test,
+    mode="confidence",
+)
 ```
 
 If `prepare_inference` is not called explicitly, BRAT-D and BRAT-P interval

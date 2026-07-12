@@ -39,11 +39,20 @@ model.fit(X_train, y_train)
 model.prepare_inference(X_calib, y_calib)
 
 pred = model.predict(X_test)
-ci_lower, ci_upper = model.confidence_interval(X_test, alpha=0.05)
-pi_lower, pi_upper = model.prediction_interval(X_test, alpha=0.05)
+ci_lower, ci_upper, _ = model.predict_intervals(
+    X_test,
+    level=0.95,
+    mode="confidence",
+)
+pi_lower, pi_upper, _ = model.predict_intervals(
+    X_test,
+    level=0.95,
+    mode="prediction",
+)
 ```
 
-`alpha=0.05` gives a 95% interval.
+`level=0.95` gives a 95% interval. Legacy calls such as
+`confidence_interval(X_test, alpha=0.05)` are still supported.
 
 ## BRAT-P Histogram Regressor
 
@@ -70,8 +79,16 @@ model.fit(X_train, y_train)
 model.prepare_inference(X_calib, y_calib)
 
 pred = model.predict(X_test)
-ci_lower, ci_upper = model.confidence_interval(X_test, alpha=0.05)
-pi_lower, pi_upper = model.prediction_interval(X_test, alpha=0.05)
+ci_lower, ci_upper, _ = model.predict_intervals(
+    X_test,
+    level=0.95,
+    mode="confidence",
+)
+pi_lower, pi_upper, _ = model.predict_intervals(
+    X_test,
+    level=0.95,
+    mode="prediction",
+)
 ```
 
 Use `n_jobs > 1` to parallelize slot fitting within eligible BRAT-P rounds.
