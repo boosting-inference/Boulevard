@@ -1,28 +1,28 @@
 import boulevard as bd
 from boulevard.estimators import (
-    BRATDHistGradientBoostingRegressor,
-    BRATPHistGradientBoostingRegressor,
-    IEBMRegressor,
+    DropoutBooster,
+    ExplainableBooster,
+    ParallelBooster,
 )
+from boulevard.estimators import interpretml as bd_interpretml
 from boulevard.estimators import sklearn as bd_sklearn
-from boulevard.estimators.catboost import CatBoostRegressor
-from boulevard.estimators.interpretml import EBMRegressor
-from boulevard.estimators.interpretml import IEBMRegressor as NamespacedIEBMRegressor
-from boulevard.estimators.lightgbm import LGBMRegressor
+from boulevard.estimators.interpretml import (
+    ExplainableBooster as NamespacedExplainableBooster,
+)
 
 
 def test_import_boulevard():
     assert bd.__version__ == "0.1.0a1"
 
 
-def test_brat_d_hist_is_public_api():
-    assert bd.BRATDHistGradientBoostingRegressor is BRATDHistGradientBoostingRegressor
+def test_dropout_booster_is_public_api():
+    assert bd.DropoutBooster is DropoutBooster
     assert (
-        bd_sklearn.BRATDHistGradientBoostingRegressor
-        is BRATDHistGradientBoostingRegressor
+        bd_sklearn.DropoutBooster
+        is DropoutBooster
     )
 
-    model = bd.BRATDHistGradientBoostingRegressor(
+    model = bd.DropoutBooster(
         max_iter=3,
         learning_rate=0.4,
         dropout_rate=0.2,
@@ -35,14 +35,14 @@ def test_brat_d_hist_is_public_api():
     assert model.max_iter == 4
 
 
-def test_brat_p_hist_is_public_api():
-    assert bd.BRATPHistGradientBoostingRegressor is BRATPHistGradientBoostingRegressor
+def test_parallel_booster_is_public_api():
+    assert bd.ParallelBooster is ParallelBooster
     assert (
-        bd_sklearn.BRATPHistGradientBoostingRegressor
-        is BRATPHistGradientBoostingRegressor
+        bd_sklearn.ParallelBooster
+        is ParallelBooster
     )
 
-    model = bd.BRATPHistGradientBoostingRegressor(
+    model = bd.ParallelBooster(
         n_rounds=3,
         trees_per_round=2,
         early_stopping=False,
@@ -56,8 +56,7 @@ def test_brat_p_hist_is_public_api():
 
 def test_backend_estimator_namespaces_import():
     assert not hasattr(bd, "XGBRegressor")
-    assert bd.IEBMRegressor is IEBMRegressor
-    assert NamespacedIEBMRegressor is IEBMRegressor
-    assert LGBMRegressor.__name__ == "LGBMRegressor"
-    assert CatBoostRegressor.__name__ == "CatBoostRegressor"
-    assert EBMRegressor.__name__ == "EBMRegressor"
+    assert bd.ExplainableBooster is ExplainableBooster
+    assert NamespacedExplainableBooster is ExplainableBooster
+    assert bd_interpretml.ExplainableBooster is ExplainableBooster
+    assert bd_interpretml.__all__ == ["ExplainableBooster"]

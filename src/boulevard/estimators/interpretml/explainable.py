@@ -1,9 +1,9 @@
-"""Inferable EBM-style additive regressor.
+"""Explainable additive regressor with interval diagnostics.
 
-This module intentionally rebuilds the current IEBM prototype inside boulevard
-instead of importing or patching InterpretML internals.  The first version keeps
-the scope narrow: squared-error regression, numeric features, main effects, and
-one-dimensional binned tree updates.
+This module implements the release ``ExplainableBooster`` directly inside
+boulevard instead of importing or patching InterpretML internals.  The first
+version keeps the scope narrow: squared-error regression, numeric features, main
+effects, and one-dimensional binned tree updates.
 """
 
 from __future__ import annotations
@@ -18,13 +18,12 @@ from sklearn.base import BaseEstimator, RegressorMixin
 from sklearn.utils.validation import check_array, check_is_fitted, check_X_y
 
 
-class IEBMRegressor(BaseEstimator, RegressorMixin):
-    """Minimal sklearn-style Inferable EBM regressor.
+class ExplainableBooster(BaseEstimator, RegressorMixin):
+    """Minimal sklearn-style explainable additive booster.
 
     The estimator follows the paper's main-effect training shape: for each round
     and each feature, fit a one-dimensional binned tree to a frozen full-model
-    residual, center and truncate the update, then average it into the feature
-    function.
+    residual, center the update, then average it into the feature function.
 
     This initial implementation supports numeric regression only.  It exposes
     bin-space interval diagnostics, but those intervals remain experimental
@@ -39,7 +38,6 @@ class IEBMRegressor(BaseEstimator, RegressorMixin):
         learning_rate: float = 1.0,
         subsample_rate: float = 1.0,
         warmup_rounds: int = 20,
-        truncation: float = 100.0,
         max_leaves: int = 2,
         max_depth: int | None = None,
         min_samples_leaf: int = 5,
@@ -51,7 +49,6 @@ class IEBMRegressor(BaseEstimator, RegressorMixin):
         self.learning_rate = learning_rate
         self.subsample_rate = subsample_rate
         self.warmup_rounds = warmup_rounds
-        self.truncation = truncation
         self.max_leaves = max_leaves
         self.max_depth = max_depth
         self.min_samples_leaf = min_samples_leaf
@@ -63,10 +60,10 @@ class IEBMRegressor(BaseEstimator, RegressorMixin):
         X: Any,
         y: Any,
         sample_weight: Any | None = None,
-    ) -> IEBMRegressor:
-        """Fit the numeric main-effect IEBM model."""
+    ) -> ExplainableBooster:
+        """Fit the numeric main-effect additive model."""
         fit_start = time.perf_counter()
-        self._validate_iebm_params()
+        self._validate_explainable_params()
         self.max_leaves_ = self._resolve_max_leaves()
 
         if sample_weight is not None:
@@ -74,9 +71,9 @@ class IEBMRegressor(BaseEstimator, RegressorMixin):
 
         X, y = check_X_y(X, y, accept_sparse=False, y_numeric=True)
         if not np.all(np.isfinite(X)):
-            raise ValueError("IEBMRegressor currently requires finite numeric X.")
+            raise ValueError("ExplainableBooster currently requires finite numeric X.")
         if not np.all(np.isfinite(y)):
-            raise ValueError("IEBMRegressor currently requires finite numeric y.")
+            raise ValueError("ExplainableBooster currently requires finite numeric y.")
 
         rng = np.random.default_rng(self.random_state)
         n_samples, n_features = X.shape
@@ -178,11 +175,7 @@ class IEBMRegressor(BaseEstimator, RegressorMixin):
                 mean_update = float(
                     np.dot(self.bin_counts_[feature_idx], update) / n_samples
                 )
-                centered = np.clip(
-                    update - mean_update,
-                    -self.truncation,
-                    self.truncation,
-                )
+                centered = update - mean_update
                 if round_idx <= self.warmup_rounds:
                     local_learning_rate = (
                         self.learning_rate
@@ -261,7 +254,7 @@ class IEBMRegressor(BaseEstimator, RegressorMixin):
         check_is_fitted(self, "term_scores_")
         X = check_array(X, accept_sparse=False)
         if not np.all(np.isfinite(X)):
-            raise ValueError("IEBMRegressor currently requires finite numeric X.")
+            raise ValueError("ExplainableBooster currently requires finite numeric X.")
         if X.shape[1] != self.n_features_in_:
             raise ValueError(
                 f"X has {X.shape[1]} features, but this model was fit with "
@@ -281,7 +274,7 @@ class IEBMRegressor(BaseEstimator, RegressorMixin):
         self,
         X_calib: Any | None = None,
         y_calib: Any | None = None,
-    ) -> IEBMRegressor:
+    ) -> ExplainableBooster:
         """Prepare bin-space diagnostic inference quantities.
 
         This estimates residual variance from held-out calibration data, or
@@ -307,7 +300,9 @@ class IEBMRegressor(BaseEstimator, RegressorMixin):
                     "X_calib and y_calib must contain the same number of rows."
                 )
             if not np.all(np.isfinite(y_var)):
-                raise ValueError("IEBMRegressor currently requires finite numeric y.")
+                raise ValueError(
+                    "ExplainableBooster currently requires finite numeric y."
+                )
 
         residuals = y_var - self.predict(X_var)
         if residuals.shape[0] < 2:
@@ -350,9 +345,8 @@ class IEBMRegressor(BaseEstimator, RegressorMixin):
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Return EBM-style intervals for full predictions.
 
-        This mirrors the patched IEBM API shape: return lower bounds, upper
-        bounds, and point predictions. The interval calculation is still
-        experimental for this rebuilt estimator.
+        This returns lower bounds, upper bounds, and point predictions. The
+        interval calculation is still experimental for this rebuilt estimator.
         """
         self._ensure_inference_prepared()
         X = self._validate_X_for_prediction(X)
@@ -542,7 +536,7 @@ class IEBMRegressor(BaseEstimator, RegressorMixin):
                 break
         return hi
 
-    def _validate_iebm_params(self) -> None:
+    def _validate_explainable_params(self) -> None:
         if self.max_rounds < 1:
             raise ValueError("max_rounds must be at least 1.")
         if self.max_bins < 2:
@@ -553,8 +547,6 @@ class IEBMRegressor(BaseEstimator, RegressorMixin):
             raise ValueError("subsample_rate must be in (0, 1].")
         if self.warmup_rounds < 0:
             raise ValueError("warmup_rounds must be non-negative.")
-        if self.truncation <= 0:
-            raise ValueError("truncation must be positive.")
         if self.max_leaves < 1:
             raise ValueError("max_leaves must be at least 1.")
         if self.max_depth is not None and self.max_depth < 1:
@@ -631,7 +623,7 @@ class IEBMRegressor(BaseEstimator, RegressorMixin):
     def _validate_X_for_prediction(self, X: Any) -> np.ndarray:
         X = check_array(X, accept_sparse=False)
         if not np.all(np.isfinite(X)):
-            raise ValueError("IEBMRegressor currently requires finite numeric X.")
+            raise ValueError("ExplainableBooster currently requires finite numeric X.")
         if X.shape[1] != self.n_features_in_:
             raise ValueError(
                 f"X has {X.shape[1]} features, but this model was fit with "
@@ -839,4 +831,4 @@ class IEBMRegressor(BaseEstimator, RegressorMixin):
         return contributions
 
 
-__all__ = ["IEBMRegressor"]
+__all__ = ["ExplainableBooster"]

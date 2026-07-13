@@ -1,9 +1,9 @@
 """Scikit-learn-backed Boulevard estimators."""
 
-from boulevard.estimators.sklearn.bratd import BRATDHistGradientBoostingRegressor
-from boulevard.estimators.sklearn.bratp import BRATPHistGradientBoostingRegressor
+from boulevard.estimators.sklearn.dropout import DropoutBooster
+from boulevard.estimators.sklearn.parallel import ParallelBooster
 
 __all__ = [
-    "BRATDHistGradientBoostingRegressor",
-    "BRATPHistGradientBoostingRegressor",
+    "DropoutBooster",
+    "ParallelBooster",
 ]

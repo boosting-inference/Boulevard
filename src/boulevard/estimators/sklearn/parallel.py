@@ -1,20 +1,17 @@
-"""Experimental histogram-tree BRAT-D estimator."""
+"""Parallel Boulevard booster built on sklearn histogram-tree internals."""
 
 from __future__ import annotations
 
 import inspect
 import time
+from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
+from joblib import Parallel, delayed
 from sklearn.ensemble import HistGradientBoostingRegressor
 from sklearn.utils.validation import check_array, check_is_fitted, check_X_y
 
-from boulevard.estimators.sklearn._nystrom import (
-    nystrom_weight_norm_cache,
-    nystrom_weight_norms,
-    sample_nystrom_landmarks,
-)
 from boulevard.intervals.asymptotic import normal_interval, normal_quantile
 
 try:
@@ -32,14 +29,27 @@ else:
     _HISTOGRAM_IMPORT_ERROR = None
 
 
-class BRATDHistGradientBoostingRegressor(HistGradientBoostingRegressor):
-    """Experimental BRAT-D backend built on sklearn histogram-tree internals.
+@dataclass
+class _SlotFitResult:
+    slot_idx: int
+    tree_idx: int
+    predictor: TreePredictor
+    train_prediction: np.ndarray
+    in_bag: np.ndarray
+    residual_seconds: float
+    gradient_seconds: float
+    grower_setup_seconds: float
+    grower_grow_seconds: float
+    predictor_seconds: float
+    training_prediction_cache_seconds: float
+
+
+class ParallelBooster(HistGradientBoostingRegressor):
+    """Parallel Boulevard booster with BRAT-P residual construction.
 
     This class intentionally inherits sklearn's public histogram gradient
-    boosting estimator for API compatibility, but the eventual implementation
-    must replace sklearn's boosting loop with the BRAT-D residual construction.
-
-    The class is not exported from ``boulevard`` yet.
+    boosting estimator for API compatibility, but replaces sklearn's boosting
+    loop with the BRAT-P group/slot residual construction.
     """
 
     def __init__(
@@ -47,10 +57,9 @@ class BRATDHistGradientBoostingRegressor(HistGradientBoostingRegressor):
         loss: str = "squared_error",
         *,
         quantile: float | None = None,
-        learning_rate: float = 1.0,
-        dropout_rate: float = 0.5,
+        n_rounds: int = 100,
+        trees_per_round: int = 10,
         subsample_rate: float = 1.0,
-        max_iter: int = 100,
         max_leaf_nodes: int | None = 31,
         max_depth: int | None = None,
         min_samples_leaf: int = 20,
@@ -67,13 +76,14 @@ class BRATDHistGradientBoostingRegressor(HistGradientBoostingRegressor):
         tol: float = 1e-7,
         verbose: int = 0,
         random_state: int | None = None,
-        nystrom_subsample_rate: float | None = 1.0,
+        drop_first_round: bool = False,
+        n_jobs: int | None = None,
     ) -> None:
         super().__init__(
             loss=loss,
             quantile=quantile,
-            learning_rate=learning_rate,
-            max_iter=max_iter,
+            learning_rate=1.0,
+            max_iter=n_rounds * trees_per_round,
             max_leaf_nodes=max_leaf_nodes,
             max_depth=max_depth,
             min_samples_leaf=min_samples_leaf,
@@ -91,17 +101,19 @@ class BRATDHistGradientBoostingRegressor(HistGradientBoostingRegressor):
             verbose=verbose,
             random_state=random_state,
         )
-        self.dropout_rate = dropout_rate
+        self.n_rounds = n_rounds
+        self.trees_per_round = trees_per_round
         self.subsample_rate = subsample_rate
-        self.nystrom_subsample_rate = nystrom_subsample_rate
+        self.drop_first_round = drop_first_round
+        self.n_jobs = n_jobs
 
     def fit(
         self,
         X: Any,
         y: Any,
         sample_weight: Any | None = None,
-    ) -> BRATDHistGradientBoostingRegressor:
-        """Fit the experimental histogram BRAT-D estimator."""
+    ) -> ParallelBooster:
+        """Fit the parallel Boulevard booster."""
         fit_start = time.perf_counter()
         binning_seconds = 0.0
         cell_metadata_seconds = 0.0
@@ -112,14 +124,13 @@ class BRATDHistGradientBoostingRegressor(HistGradientBoostingRegressor):
         predictor_seconds = 0.0
         training_prediction_cache_seconds = 0.0
         score_seconds = 0.0
-        residual_tree_prediction_calls = 0
-        residual_tree_traversal_calls = 0
-        residual_cache_hit_rounds = 0
-        residual_zero_keep_rounds = 0
         sampled_training_rows = 0
+        parallel_rounds = 0
+        serial_rounds = 0
+        vectorized_residual_rounds = 0
 
         self._check_histogram_backend()
-        self._validate_brat_d_params()
+        self._validate_brat_p_params()
 
         X, y = check_X_y(X, y, accept_sparse=False, y_numeric=True)
         if sample_weight is not None:
@@ -162,83 +173,133 @@ class BRATDHistGradientBoostingRegressor(HistGradientBoostingRegressor):
 
         self._baseline_prediction = np.zeros((1, 1), dtype=float)
         self.n_trees_per_iteration_ = 1
+        total_trees = self.n_rounds * self.trees_per_round
+        self.max_iter = total_trees
         self._predictors: list[list[TreePredictor]] = []
-        self._train_tree_predictions_ = np.empty((X_binned.shape[0], self.max_iter))
-        self.in_bag_matrix_ = np.zeros((X_binned.shape[0], self.max_iter), dtype=bool)
+        self._predictor_table: list[list[TreePredictor | None]] = [
+            [None for _ in range(self.trees_per_round)]
+            for _ in range(self.n_rounds)
+        ]
+        self._train_tree_predictions_ = np.empty((X_binned.shape[0], total_trees))
+        self._train_prediction_table_ = np.zeros(
+            (self.n_rounds, self.trees_per_round, X_binned.shape[0]),
+            dtype=float,
+        )
+        self.in_bag_matrix_ = np.zeros((X_binned.shape[0], total_trees), dtype=bool)
         self.train_score_: list[float] = []
-        self.conformal_interval_ = None
+        slot_prediction_sums = np.zeros(
+            (self.trees_per_round, X_binned.shape[0]),
+            dtype=float,
+        )
+        current_round_prediction_sum = np.zeros(X_binned.shape[0], dtype=float)
+        tree_seeds = rng.integers(
+            0,
+            np.iinfo(np.int32).max,
+            size=total_trees,
+            dtype=np.int64,
+        )
+        n_jobs = self._effective_n_jobs()
 
-        for iteration in range(self.max_iter):
+        for round_idx in range(self.n_rounds):
+            current_round_prediction_sum.fill(0.0)
+            previous_slot_prediction_sums = slot_prediction_sums.copy()
             step_start = time.perf_counter()
-            residuals = self._residuals_for_next_tree_binned(
-                X_binned,
+            round_residuals = self._residuals_for_round_binned(
                 y,
-                rng,
-                n_threads,
-                use_training_prediction_cache=True,
+                round_idx=round_idx,
+                previous_slot_prediction_sums=previous_slot_prediction_sums,
             )
             residual_seconds += time.perf_counter() - step_start
-            selected_count = self._last_residual_selected_tree_count_
-            residual_tree_prediction_calls += selected_count
-            if self._last_residual_used_training_cache_:
-                residual_cache_hit_rounds += 1
-            else:
-                residual_tree_traversal_calls += selected_count
-            if iteration > 0 and selected_count == 0:
-                residual_zero_keep_rounds += 1
+            if round_residuals is not None:
+                vectorized_residual_rounds += 1
 
-            in_bag = self._sample_in_bag_indices(X_binned.shape[0], rng)
-            self.in_bag_matrix_[in_bag, iteration] = True
-            sampled_training_rows += int(in_bag.size)
-
-            step_start = time.perf_counter()
-            gradients = np.ascontiguousarray(-residuals[in_bag], dtype=G_H_DTYPE)
-            if sample_weight is None:
-                hessians = np.ones(1, dtype=G_H_DTYPE)
-            else:
-                gradients = np.ascontiguousarray(
-                    gradients * sample_weight[in_bag],
-                    dtype=G_H_DTYPE,
+            can_fit_round_in_parallel = (
+                n_jobs != 1 and (round_idx > 0 or self.drop_first_round)
+            )
+            if can_fit_round_in_parallel:
+                parallel_rounds += 1
+                round_results = Parallel(n_jobs=n_jobs, prefer="threads")(
+                    delayed(self._fit_brat_p_slot_binned)(
+                        X_binned=X_binned,
+                        residuals=round_residuals[slot_idx],
+                        sample_weight=sample_weight,
+                        round_idx=round_idx,
+                        slot_idx=slot_idx,
+                        n_bins=n_bins,
+                        has_missing_values=has_missing_values,
+                        tree_seed=int(
+                            tree_seeds[
+                                round_idx * self.trees_per_round + slot_idx
+                            ]
+                        ),
+                        n_threads=n_threads,
+                    )
+                    for slot_idx in range(self.trees_per_round)
                 )
-                hessians = np.ascontiguousarray(sample_weight[in_bag], dtype=G_H_DTYPE)
-            gradient_seconds += time.perf_counter() - step_start
+            else:
+                serial_rounds += 1
+                round_results = []
+                for slot_idx in range(self.trees_per_round):
+                    if round_residuals is None:
+                        step_start = time.perf_counter()
+                        residuals = self._residuals_for_next_tree_binned(
+                            y,
+                            round_idx=round_idx,
+                            slot_idx=slot_idx,
+                            previous_slot_prediction_sums=(
+                                previous_slot_prediction_sums
+                            ),
+                            current_round_prediction_sum=current_round_prediction_sum,
+                        )
+                        residual_seconds += time.perf_counter() - step_start
+                    else:
+                        residuals = round_residuals[slot_idx]
 
-            step_start = time.perf_counter()
-            grower = self._make_tree_grower(
-                X_binned=np.asfortranarray(X_binned[in_bag]),
-                gradients=gradients,
-                hessians=hessians,
-                n_bins=n_bins,
-                has_missing_values=has_missing_values,
-                rng=rng,
-                n_threads=n_threads,
-            )
-            grower_setup_seconds += time.perf_counter() - step_start
+                    result = self._fit_brat_p_slot_binned(
+                        X_binned=X_binned,
+                        residuals=residuals,
+                        sample_weight=sample_weight,
+                        round_idx=round_idx,
+                        slot_idx=slot_idx,
+                        n_bins=n_bins,
+                        has_missing_values=has_missing_values,
+                        tree_seed=int(
+                            tree_seeds[
+                                round_idx * self.trees_per_round + slot_idx
+                            ]
+                        ),
+                        n_threads=n_threads,
+                    )
+                    round_results.append(result)
+                    current_round_prediction_sum += result.train_prediction
 
-            step_start = time.perf_counter()
-            grower.grow()
-            grower_grow_seconds += time.perf_counter() - step_start
+            for result in sorted(round_results, key=lambda item: item.slot_idx):
+                self.in_bag_matrix_[result.in_bag, result.tree_idx] = True
+                sampled_training_rows += int(result.in_bag.size)
+                residual_seconds += result.residual_seconds
+                gradient_seconds += result.gradient_seconds
+                grower_setup_seconds += result.grower_setup_seconds
+                grower_grow_seconds += result.grower_grow_seconds
+                predictor_seconds += result.predictor_seconds
+                training_prediction_cache_seconds += (
+                    result.training_prediction_cache_seconds
+                )
 
-            step_start = time.perf_counter()
-            predictor = grower.make_predictor(
-                binning_thresholds=self._bin_mapper.bin_thresholds_
-            )
-            predictor_seconds += time.perf_counter() - step_start
-            self._predictors.append([predictor])
+                self._predictors.append([result.predictor])
+                self._predictor_table[round_idx][result.slot_idx] = result.predictor
+                self._train_tree_predictions_[:, result.tree_idx] = (
+                    result.train_prediction
+                )
+                self._train_prediction_table_[round_idx, result.slot_idx] = (
+                    result.train_prediction
+                )
+                slot_prediction_sums[result.slot_idx] += result.train_prediction
 
-            step_start = time.perf_counter()
-            self._train_tree_predictions_[:, iteration] = predictor.predict_binned(
-                X_binned,
-                self._bin_mapper.missing_values_bin_idx_,
-                n_threads,
-            )
-            training_prediction_cache_seconds += time.perf_counter() - step_start
-
-            if self.verbose:
-                step_start = time.perf_counter()
-                mse = float(np.mean((y - self.predict(X)) ** 2))
-                self.train_score_.append(mse)
-                score_seconds += time.perf_counter() - step_start
+                if self.verbose:
+                    step_start = time.perf_counter()
+                    mse = float(np.mean((y - self.predict(X)) ** 2))
+                    self.train_score_.append(mse)
+                    score_seconds += time.perf_counter() - step_start
 
         if not self.verbose:
             self.train_score_ = []
@@ -254,30 +315,31 @@ class BRATDHistGradientBoostingRegressor(HistGradientBoostingRegressor):
             "predictor_seconds": predictor_seconds,
             "training_prediction_cache_seconds": training_prediction_cache_seconds,
             "score_seconds": score_seconds,
-            "residual_tree_prediction_calls": residual_tree_prediction_calls,
-            "residual_tree_traversal_calls": residual_tree_traversal_calls,
-            "residual_cache_hit_rounds": residual_cache_hit_rounds,
-            "residual_zero_keep_rounds": residual_zero_keep_rounds,
+            "n_rounds": self.n_rounds,
+            "trees_per_round": self.trees_per_round,
+            "total_trees": total_trees,
+            "drop_first_round": self.drop_first_round,
+            "n_jobs": self.n_jobs,
+            "effective_n_jobs": n_jobs,
+            "parallel_rounds": parallel_rounds,
+            "serial_rounds": serial_rounds,
+            "vectorized_residual_rounds": vectorized_residual_rounds,
             "sampled_training_rows": sampled_training_rows,
         }
         return self
 
     def predict(self, X: Any) -> np.ndarray:
-        """Predict regression targets with BRAT-D signal correction."""
+        """Predict regression targets with BRAT-P round/slot aggregation."""
         check_is_fitted(self, "_predictors")
         X = check_array(X, accept_sparse=False)
         X_binned = self._bin_data(X)
-        tree_sum = self._predict_tree_sum_binned(
-            X_binned,
-            selected=None,
-            n_threads=self._effective_n_threads(),
-        )
         if not self._predictors:
             return np.zeros(X.shape[0], dtype=float)
 
-        q = 1 - self.dropout_rate
-        raw_boulevard = (self.learning_rate / len(self._predictors)) * tree_sum
-        return ((1 + self.learning_rate * q) / self.learning_rate) * raw_boulevard
+        return self._predict_brat_p_binned(
+            X_binned,
+            n_threads=self._effective_n_threads(),
+        )
 
     def apply_bin_indices(self, X: Any) -> np.ndarray:
         """Return sklearn histogram-bin indices for each sample and feature."""
@@ -298,11 +360,11 @@ class BRATDHistGradientBoostingRegressor(HistGradientBoostingRegressor):
         self,
         X_calib: Any | None = None,
         y_calib: Any | None = None,
-    ) -> BRATDHistGradientBoostingRegressor:
-        """Prepare observed-cell BRAT-D asymptotic interval inference.
+    ) -> ParallelBooster:
+        """Prepare observed-cell BRAT-P asymptotic interval inference.
 
         Histogram bins compress duplicate training rows into multidimensional
-        observed cells. The BRAT-D leaf kernel is then built over these cells
+        observed cells. The BRAT-P leaf kernel is then built over these cells
         with cell counts carrying the multiplicity of the original rows.
         """
         check_is_fitted(self, "_predictors")
@@ -343,7 +405,7 @@ class BRATDHistGradientBoostingRegressor(HistGradientBoostingRegressor):
     ) -> tuple[np.ndarray, np.ndarray]:
         """Return asymptotic prediction intervals."""
         if method != "asymptotic":
-            raise ValueError("Only method='asymptotic' is implemented for BRAT-D hist.")
+            raise ValueError("Only method='asymptotic' is implemented for BRAT-P hist.")
         lower, upper, _ = self.predict_intervals(
             X,
             level=1.0 - (0.05 if alpha is None else alpha),
@@ -362,7 +424,7 @@ class BRATDHistGradientBoostingRegressor(HistGradientBoostingRegressor):
         X_calib: Any | None = None,
         y_calib: Any | None = None,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """Return BRAT-D intervals and point predictions.
+        """Return BRAT-P intervals and point predictions.
 
         Parameters
         ----------
@@ -376,7 +438,7 @@ class BRATDHistGradientBoostingRegressor(HistGradientBoostingRegressor):
             response intervals, or ``"reproduction"`` for repeated-fit signal
             intervals.
         calibrated:
-            Apply held-out conformal-style scaling to prediction intervals.
+            Apply held-out empirical scaling to prediction intervals.
         X_calib, y_calib:
             Optional variance-estimation data. If omitted, training residuals
             are used.
@@ -394,22 +456,20 @@ class BRATDHistGradientBoostingRegressor(HistGradientBoostingRegressor):
         alpha = 1.0 - level
         center = self.predict(X)
         r_norm = self._weight_norms(X)
-        q = 1 - self.dropout_rate
-        scale = (1 + self.learning_rate * q) / self.learning_rate
 
         if mode == "confidence":
-            se = scale * np.sqrt(self.sigma_hat2_) * r_norm
+            se = np.sqrt(self.sigma_hat2_) * r_norm
             interval = normal_interval(center, se, alpha=alpha)
             return interval.lower, interval.upper, center
 
         if mode == "prediction":
-            se = np.sqrt(self.sigma_hat2_ * (1 + (scale * r_norm) ** 2))
+            se = np.sqrt(self.sigma_hat2_ * (1 + r_norm**2))
             half_width = normal_quantile(alpha) * se
             if calibrated:
                 half_width *= self._prediction_calibration_scale(alpha=alpha)
             return center - half_width, center + half_width, center
 
-        se = np.sqrt(2) * scale * np.sqrt(self.sigma_hat2_) * r_norm
+        se = np.sqrt(2) * np.sqrt(self.sigma_hat2_) * r_norm
         interval = normal_interval(center, se, alpha=alpha)
         return interval.lower, interval.upper, center
 
@@ -467,7 +527,7 @@ class BRATDHistGradientBoostingRegressor(HistGradientBoostingRegressor):
         return lower, upper
 
     def weight_norms(self, X: Any) -> np.ndarray:
-        """Return observed-cell BRAT-D weight norms used by intervals."""
+        """Return observed-cell BRAT-P weight norms used by intervals."""
         self._ensure_inference_prepared()
         return self._weight_norms(X)
 
@@ -475,55 +535,59 @@ class BRATDHistGradientBoostingRegressor(HistGradientBoostingRegressor):
     def _check_histogram_backend() -> None:
         if _HISTOGRAM_IMPORT_ERROR is not None:
             raise ImportError(
-                "BRATDHistGradientBoostingRegressor requires sklearn histogram "
+                "ParallelBooster requires sklearn histogram "
                 "gradient boosting private internals."
             ) from _HISTOGRAM_IMPORT_ERROR
 
-    def _validate_brat_d_params(self) -> None:
+    def _validate_brat_p_params(self) -> None:
         if self.loss != "squared_error":
             raise ValueError(
-                "BRATDHistGradientBoostingRegressor currently supports only "
+                "ParallelBooster currently supports only "
                 "loss='squared_error'."
             )
-        if self.learning_rate <= 0:
-            raise ValueError("learning_rate must be positive.")
-        if not 0 <= self.dropout_rate < 1:
-            raise ValueError("dropout_rate must be in [0, 1).")
+        if self.n_rounds < 1:
+            raise ValueError("n_rounds must be at least 1.")
+        if self.trees_per_round <= 1:
+            raise ValueError("trees_per_round must be greater than 1.")
         if not 0 < self.subsample_rate <= 1:
             raise ValueError("subsample_rate must be in (0, 1].")
         if self.warm_start:
             raise ValueError(
-                "warm_start is not supported for BRAT-D histogram fitting."
+                "warm_start is not supported for BRAT-P histogram fitting."
             )
         if self.early_stopping not in (False, None):
             raise ValueError(
-                "early_stopping must be False or None for BRAT-D histogram fitting."
+                "early_stopping must be False or None for BRAT-P histogram fitting."
             )
         if self.categorical_features is not None:
             raise ValueError(
-                "categorical_features is not supported yet for BRAT-D histogram "
+                "categorical_features is not supported yet for BRAT-P histogram "
                 "fitting."
             )
         if self.monotonic_cst is not None:
             raise ValueError(
-                "monotonic_cst is not supported yet for BRAT-D histogram fitting."
+                "monotonic_cst is not supported yet for BRAT-P histogram fitting."
             )
         if self.interaction_cst is not None:
             raise ValueError(
-                "interaction_cst is not supported yet for BRAT-D histogram fitting."
+                "interaction_cst is not supported yet for BRAT-P histogram fitting."
             )
-        if self.max_iter < 1:
-            raise ValueError("max_iter must be at least 1.")
         if self.max_bins < 2:
             raise ValueError("max_bins must be at least 2.")
         if self.max_bins > 255:
             raise ValueError("max_bins cannot exceed 255 for sklearn histogram trees.")
-        if self.nystrom_subsample_rate is not None:
-            if not 0 < self.nystrom_subsample_rate <= 1:
-                raise ValueError("nystrom_subsample_rate must be in (0, 1].")
+        if self.n_jobs is not None and (
+            isinstance(self.n_jobs, bool) or not isinstance(self.n_jobs, int)
+        ):
+            raise ValueError("n_jobs must be an integer or None.")
+        if self.n_jobs == 0:
+            raise ValueError("n_jobs cannot be 0.")
 
     def _effective_n_threads(self) -> int:
         return 1
+
+    def _effective_n_jobs(self) -> int:
+        return 1 if self.n_jobs is None else self.n_jobs
 
     def _sample_in_bag_indices(
         self,
@@ -588,37 +652,126 @@ class BRATDHistGradientBoostingRegressor(HistGradientBoostingRegressor):
             kwargs["rng"] = rng
         return TreeGrower(**kwargs)
 
+    def _fit_brat_p_slot_binned(
+        self,
+        *,
+        X_binned: np.ndarray,
+        residuals: np.ndarray,
+        sample_weight: np.ndarray | None,
+        round_idx: int,
+        slot_idx: int,
+        n_bins: int,
+        has_missing_values: np.ndarray,
+        tree_seed: int,
+        n_threads: int,
+    ) -> _SlotFitResult:
+        tree_idx = round_idx * self.trees_per_round + slot_idx
+        rng = np.random.default_rng(tree_seed)
+
+        in_bag = self._sample_in_bag_indices(X_binned.shape[0], rng)
+
+        step_start = time.perf_counter()
+        gradients = np.ascontiguousarray(
+            -residuals[in_bag],
+            dtype=G_H_DTYPE,
+        )
+        if sample_weight is None:
+            hessians = np.ones(1, dtype=G_H_DTYPE)
+        else:
+            gradients = np.ascontiguousarray(
+                gradients * sample_weight[in_bag],
+                dtype=G_H_DTYPE,
+            )
+            hessians = np.ascontiguousarray(
+                sample_weight[in_bag],
+                dtype=G_H_DTYPE,
+            )
+        gradient_seconds = time.perf_counter() - step_start
+
+        step_start = time.perf_counter()
+        grower = self._make_tree_grower(
+            X_binned=np.asfortranarray(X_binned[in_bag]),
+            gradients=gradients,
+            hessians=hessians,
+            n_bins=n_bins,
+            has_missing_values=has_missing_values,
+            rng=rng,
+            n_threads=n_threads,
+        )
+        grower_setup_seconds = time.perf_counter() - step_start
+
+        step_start = time.perf_counter()
+        grower.grow()
+        grower_grow_seconds = time.perf_counter() - step_start
+
+        step_start = time.perf_counter()
+        predictor = grower.make_predictor(
+            binning_thresholds=self._bin_mapper.bin_thresholds_
+        )
+        predictor_seconds = time.perf_counter() - step_start
+
+        step_start = time.perf_counter()
+        train_prediction = predictor.predict_binned(
+            X_binned,
+            self._bin_mapper.missing_values_bin_idx_,
+            n_threads,
+        )
+        training_prediction_cache_seconds = time.perf_counter() - step_start
+
+        return _SlotFitResult(
+            slot_idx=slot_idx,
+            tree_idx=tree_idx,
+            predictor=predictor,
+            train_prediction=train_prediction,
+            in_bag=in_bag,
+            residual_seconds=0.0,
+            gradient_seconds=gradient_seconds,
+            grower_setup_seconds=grower_setup_seconds,
+            grower_grow_seconds=grower_grow_seconds,
+            predictor_seconds=predictor_seconds,
+            training_prediction_cache_seconds=training_prediction_cache_seconds,
+        )
+
+    def _residuals_for_round_binned(
+        self,
+        y: np.ndarray,
+        *,
+        round_idx: int,
+        previous_slot_prediction_sums: np.ndarray,
+    ) -> np.ndarray | None:
+        if round_idx == 0 and not self.drop_first_round:
+            return None
+
+        if round_idx == 0:
+            return np.broadcast_to(
+                y,
+                (self.trees_per_round, y.shape[0]),
+            )
+
+        previous_slot_averages = previous_slot_prediction_sums / round_idx
+        total_previous = previous_slot_averages.sum(axis=0)
+        return y[None, :] - total_previous[None, :] + previous_slot_averages
+
     def _residuals_for_next_tree_binned(
         self,
-        X_binned: np.ndarray,
         y: np.ndarray,
-        rng: np.random.Generator,
-        n_threads: int,
         *,
-        use_training_prediction_cache: bool = False,
+        round_idx: int,
+        slot_idx: int,
+        previous_slot_prediction_sums: np.ndarray,
+        current_round_prediction_sum: np.ndarray,
     ) -> np.ndarray:
-        self._last_residual_selected_tree_count_ = 0
-        self._last_residual_used_training_cache_ = False
-        if not self._predictors:
+        if round_idx == 0 and self.drop_first_round:
             return y
 
-        q = 1 - self.dropout_rate
-        keep_mask = rng.random(len(self._predictors)) < q
-        selected = np.flatnonzero(keep_mask)
-        self._last_residual_selected_tree_count_ = int(selected.size)
-        if selected.size == 0:
-            return y
+        if round_idx == 0:
+            return y - current_round_prediction_sum
 
-        if use_training_prediction_cache:
-            tree_sum = self._train_tree_predictions_[:, selected].sum(axis=1)
-            self._last_residual_used_training_cache_ = True
-        else:
-            tree_sum = self._predict_tree_sum_binned(
-                X_binned,
-                selected=selected,
-                n_threads=n_threads,
-            )
-        return y - (self.learning_rate / len(self._predictors)) * tree_sum
+        previous_slot_averages = previous_slot_prediction_sums / round_idx
+        dropped_prediction = (
+            previous_slot_averages.sum(axis=0) - previous_slot_averages[slot_idx]
+        )
+        return y - dropped_prediction
 
     def _predict_tree_sum_binned(
         self,
@@ -641,6 +794,25 @@ class BRATDHistGradientBoostingRegressor(HistGradientBoostingRegressor):
                 n_threads,
             )
         return out
+
+    def _predict_brat_p_binned(
+        self,
+        X_binned: np.ndarray,
+        *,
+        n_threads: int,
+    ) -> np.ndarray:
+        slot_sums = np.zeros((self.trees_per_round, X_binned.shape[0]), dtype=float)
+        for round_idx in range(self.n_rounds):
+            for slot_idx in range(self.trees_per_round):
+                predictor = self._predictor_table[round_idx][slot_idx]
+                if predictor is None:
+                    continue
+                slot_sums[slot_idx] += predictor.predict_binned(
+                    X_binned,
+                    self._bin_mapper.missing_values_bin_idx_,
+                    n_threads,
+                )
+        return slot_sums.sum(axis=0) / self.n_rounds
 
     def _apply_leaf_indices_binned(self, X_binned: np.ndarray) -> np.ndarray:
         leaves = np.empty((X_binned.shape[0], len(self._predictors)), dtype=int)
@@ -686,31 +858,15 @@ class BRATDHistGradientBoostingRegressor(HistGradientBoostingRegressor):
         self._prepare_observed_cell_norm_cache()
 
     def _prepare_observed_cell_norm_cache(self) -> None:
-        for attr in (
-            "nystrom_landmark_indices_",
-            "nystrom_sigma_matrix_",
-            "nystrom_landmark_count_",
-        ):
-            if hasattr(self, attr):
-                delattr(self, attr)
-
-        if self.nystrom_subsample_rate is not None:
-            landmark_indices = sample_nystrom_landmarks(
-                cell_counts=self.cell_counts_,
-                subsample_rate=self.nystrom_subsample_rate,
-                random_state=self.random_state,
-            )
-            self.nystrom_landmark_indices_ = landmark_indices
-            self.nystrom_landmark_count_ = int(landmark_indices.size)
-            if landmark_indices.size < self.cell_kernel_matrix_.shape[0]:
-                self._prepare_nystrom_cell_norm_cache(landmark_indices)
-                self.inference_method_ = "histogram_cell_nystrom"
-                return
-
-        q = 1 - self.dropout_rate
         weighted_kernel = self.cell_counts_[:, None] * self.cell_kernel_matrix_
-        matrix = (1 / self.learning_rate) * np.eye(self.cell_kernel_matrix_.shape[0])
-        self.cell_system_matrix_t_ = (matrix + q * weighted_kernel).T
+        # BRAT-P uses k(x)' [K^{-1} I + (K - 1) K^{-1} K_n]^{-1}.
+        matrix = (1 / self.trees_per_round) * np.eye(
+            self.cell_kernel_matrix_.shape[0]
+        )
+        self.cell_system_matrix_t_ = (
+            matrix
+            + ((self.trees_per_round - 1) / self.trees_per_round) * weighted_kernel
+        ).T
 
         weights = np.linalg.solve(
             self.cell_system_matrix_t_, self.cell_kernel_matrix_.T
@@ -719,18 +875,6 @@ class BRATDHistGradientBoostingRegressor(HistGradientBoostingRegressor):
             np.maximum((weights**2) @ self.cell_counts_, 0.0)
         )
         self.inference_method_ = "histogram_cell"
-
-    def _prepare_nystrom_cell_norm_cache(self, landmark_indices: np.ndarray) -> None:
-        q = 1 - self.dropout_rate
-        self.cell_weight_norms_, self.nystrom_sigma_matrix_ = (
-            nystrom_weight_norm_cache(
-                kernel_matrix=self.cell_kernel_matrix_,
-                cell_counts=self.cell_counts_,
-                landmark_indices=landmark_indices,
-                identity_scale=1 / self.learning_rate,
-                kernel_scale=q,
-            )
-        )
 
     @staticmethod
     def _cell_kernel_matrix(
@@ -799,15 +943,19 @@ class BRATDHistGradientBoostingRegressor(HistGradientBoostingRegressor):
                     out[row_idx, reference_tree_leaves == leaf] += 1.0 / denom
         return out / n_trees
 
-    def _solve_cell_brat_d_weights(self, kernel_vectors: np.ndarray) -> np.ndarray:
+    def _solve_cell_brat_p_weights(self, kernel_vectors: np.ndarray) -> np.ndarray:
         matrix_t = getattr(self, "cell_system_matrix_t_", None)
         if matrix_t is None:
-            q = 1 - self.dropout_rate
             weighted_kernel = self.cell_counts_[:, None] * self.cell_kernel_matrix_
-            matrix = (1 / self.learning_rate) * np.eye(
+            # BRAT-P uses k(x)' [K^{-1} I + (K - 1) K^{-1} K_n]^{-1}.
+            matrix = (1 / self.trees_per_round) * np.eye(
                 self.cell_kernel_matrix_.shape[0]
             )
-            matrix_t = (matrix + q * weighted_kernel).T
+            matrix_t = (
+                matrix
+                + ((self.trees_per_round - 1) / self.trees_per_round)
+                * weighted_kernel
+            ).T
         return np.linalg.solve(matrix_t, kernel_vectors.T).T
 
     def _weight_norms(self, X: Any) -> np.ndarray:
@@ -819,29 +967,6 @@ class BRATDHistGradientBoostingRegressor(HistGradientBoostingRegressor):
             dtype=int,
         )
 
-        if hasattr(self, "nystrom_sigma_matrix_"):
-            landmark_indices = self.nystrom_landmark_indices_
-            landmark_vectors = np.empty(
-                (X_binned.shape[0], landmark_indices.shape[0]),
-                dtype=float,
-            )
-            observed = cell_indices >= 0
-            if np.any(observed):
-                landmark_vectors[observed] = self.cell_kernel_matrix_[
-                    np.ix_(cell_indices[observed], landmark_indices)
-                ]
-            if np.any(~observed):
-                unseen_binned = X_binned[~observed]
-                test_leaf_indices = self._apply_leaf_indices_binned(unseen_binned)
-                landmark_vectors[~observed] = self._cell_kernel_vector(
-                    test_leaf_indices,
-                    reference_cell_indices=landmark_indices,
-                )
-            return nystrom_weight_norms(
-                landmark_vectors,
-                self.nystrom_sigma_matrix_,
-            )
-
         norms = np.empty(X_binned.shape[0], dtype=float)
         observed = cell_indices >= 0
         if np.any(observed):
@@ -851,7 +976,7 @@ class BRATDHistGradientBoostingRegressor(HistGradientBoostingRegressor):
             unseen_binned = X_binned[~observed]
             test_leaf_indices = self._apply_leaf_indices_binned(unseen_binned)
             kernel_vectors = self._cell_kernel_vector(test_leaf_indices)
-            weights = self._solve_cell_brat_d_weights(kernel_vectors)
+            weights = self._solve_cell_brat_p_weights(kernel_vectors)
             norms[~observed] = np.sqrt(
                 np.maximum((weights**2) @ self.cell_counts_, 0.0)
             )
@@ -860,9 +985,7 @@ class BRATDHistGradientBoostingRegressor(HistGradientBoostingRegressor):
 
     def _prediction_half_width(self, X: Any, alpha: float) -> np.ndarray:
         r_norm = self._weight_norms(X)
-        q = 1 - self.dropout_rate
-        scale = (1 + self.learning_rate * q) / self.learning_rate
-        se = np.sqrt(self.sigma_hat2_ * (1 + (scale * r_norm) ** 2))
+        se = np.sqrt(self.sigma_hat2_ * (1 + r_norm**2))
         return normal_quantile(alpha) * se
 
     def _prediction_calibration_scale(self, alpha: float) -> float:
@@ -901,9 +1024,9 @@ class BRATDHistGradientBoostingRegressor(HistGradientBoostingRegressor):
         check_is_fitted(self, "_predictors")
         if not self._is_inference_prepared():
             raise RuntimeError(
-                "BRAT-D histogram asymptotic intervals require "
+                "BRAT-P histogram asymptotic intervals require "
                 "prepare_inference(...) before calling interval methods."
             )
 
 
-__all__ = ["BRATDHistGradientBoostingRegressor"]
+__all__ = ["ParallelBooster"]

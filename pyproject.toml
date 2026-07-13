@@ -42,39 +42,16 @@ Repository = "https://github.com/boosting-inference/Boulevard"
 Issues = "https://github.com/boosting-inference/Boulevard/issues"
 
 [project.optional-dependencies]
-xgboost = [
-    "xgboost>=2.0",
-]
-
-lightgbm = [
-    "lightgbm>=4.0",
-]
-
-catboost = [
-    "catboost>=1.2",
-]
-
-interpretml = [
-    "interpret>=0.6",
-]
-
 dev = [
     "build>=1.0",
     "matplotlib>=3.8",
+    "nbformat>=5.9",
     "pytest>=7.0",
     "ruff>=0.4",
     "black>=24.0",
 ]
 
 examples = [
-    "matplotlib>=3.8",
-]
-
-all = [
-    "xgboost>=2.0",
-    "lightgbm>=4.0",
-    "catboost>=1.2",
-    "interpret>=0.6",
     "matplotlib>=3.8",
 ]
 

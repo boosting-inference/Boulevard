@@ -1,13 +1,13 @@
 """Public estimator classes."""
 
-from boulevard.estimators.interpretml import IEBMRegressor
+from boulevard.estimators.interpretml import ExplainableBooster
 from boulevard.estimators.sklearn import (
-    BRATDHistGradientBoostingRegressor,
-    BRATPHistGradientBoostingRegressor,
+    DropoutBooster,
+    ParallelBooster,
 )
 
 __all__ = [
-    "BRATDHistGradientBoostingRegressor",
-    "BRATPHistGradientBoostingRegressor",
-    "IEBMRegressor",
+    "DropoutBooster",
+    "ParallelBooster",
+    "ExplainableBooster",
 ]

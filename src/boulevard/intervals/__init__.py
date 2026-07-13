@@ -1,5 +1,9 @@
-"""Interval estimators and calibrators."""
+"""Interval utilities."""
 
-from boulevard.intervals.conformal import SplitConformalInterval
+from boulevard.intervals.asymptotic import (
+    NormalInterval,
+    normal_interval,
+    normal_quantile,
+)
 
-__all__ = ["SplitConformalInterval"]
+__all__ = ["NormalInterval", "normal_interval", "normal_quantile"]

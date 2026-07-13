@@ -14,16 +14,16 @@ def _make_regression_data(n_samples=90, random_state=0):
 
 def test_top_level_public_api_names():
     assert bd.__all__ == [
-        "BRATDHistGradientBoostingRegressor",
-        "BRATPHistGradientBoostingRegressor",
-        "IEBMRegressor",
+        "DropoutBooster",
+        "ParallelBooster",
+        "ExplainableBooster",
         "__version__",
     ]
     assert not hasattr(bd, "XGBRegressor")
 
 
 def test_top_level_brat_d_is_sklearn_compatible():
-    model = bd.BRATDHistGradientBoostingRegressor(
+    model = bd.DropoutBooster(
         max_iter=3,
         learning_rate=0.5,
         dropout_rate=0.2,
@@ -43,7 +43,7 @@ def test_top_level_brat_d_is_sklearn_compatible():
 
 
 def test_top_level_brat_p_is_sklearn_compatible():
-    model = bd.BRATPHistGradientBoostingRegressor(
+    model = bd.ParallelBooster(
         n_rounds=3,
         trees_per_round=2,
         max_leaf_nodes=4,
@@ -61,8 +61,8 @@ def test_top_level_brat_p_is_sklearn_compatible():
     assert model.n_rounds == 4
 
 
-def test_top_level_iebm_is_sklearn_compatible():
-    model = bd.IEBMRegressor(
+def test_top_level_explainable_booster_is_sklearn_compatible():
+    model = bd.ExplainableBooster(
         max_rounds=5,
         max_bins=8,
         max_depth=2,
@@ -80,7 +80,7 @@ def test_top_level_iebm_is_sklearn_compatible():
 
 def test_top_level_brat_d_user_workflow():
     X, y = _make_regression_data(n_samples=100, random_state=1)
-    model = bd.BRATDHistGradientBoostingRegressor(
+    model = bd.DropoutBooster(
         max_iter=4,
         learning_rate=0.6,
         dropout_rate=0.2,
@@ -115,7 +115,7 @@ def test_top_level_brat_d_user_workflow():
 
 def test_top_level_brat_p_user_workflow():
     X, y = _make_regression_data(n_samples=100, random_state=2)
-    model = bd.BRATPHistGradientBoostingRegressor(
+    model = bd.ParallelBooster(
         n_rounds=2,
         trees_per_round=2,
         max_leaf_nodes=4,
@@ -147,9 +147,9 @@ def test_top_level_brat_p_user_workflow():
     assert np.all(pi_lower <= pi_upper)
 
 
-def test_top_level_iebm_user_workflow():
+def test_top_level_explainable_booster_user_workflow():
     X, y = _make_regression_data(n_samples=100, random_state=3)
-    model = bd.IEBMRegressor(
+    model = bd.ExplainableBooster(
         max_rounds=8,
         max_bins=8,
         max_depth=2,

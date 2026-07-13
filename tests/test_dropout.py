@@ -4,19 +4,17 @@ from sklearn.base import clone
 from sklearn.datasets import make_regression
 from sklearn.model_selection import train_test_split
 
-from boulevard.estimators.sklearn._nystrom import nystrom_weight_norms
-from boulevard.estimators.sklearn.bratd import BRATDHistGradientBoostingRegressor
+from boulevard.estimators.sklearn.dropout import DropoutBooster
 
 
-def test_brat_d_hist_skeleton_is_sklearn_cloneable():
-    model = BRATDHistGradientBoostingRegressor(
+def test_dropout_booster_skeleton_is_sklearn_cloneable():
+    model = DropoutBooster(
         learning_rate=0.8,
         dropout_rate=0.2,
         subsample_rate=0.7,
         max_iter=3,
         early_stopping=False,
         random_state=0,
-        nystrom_subsample_rate=0.25,
     )
 
     cloned = clone(model)
@@ -25,23 +23,16 @@ def test_brat_d_hist_skeleton_is_sklearn_cloneable():
     assert cloned.dropout_rate == 0.2
     assert cloned.subsample_rate == 0.7
     assert cloned.max_iter == 3
-    assert cloned.nystrom_subsample_rate == 0.25
 
 
-def test_brat_d_hist_nystrom_default_is_all_landmarks():
-    model = BRATDHistGradientBoostingRegressor()
-
-    assert model.nystrom_subsample_rate == 1.0
-
-
-def test_brat_d_hist_fit_predict_smoke():
+def test_dropout_booster_fit_predict_smoke():
     X, y = make_regression(
         n_samples=80,
         n_features=3,
         noise=1.0,
         random_state=0,
     )
-    model = BRATDHistGradientBoostingRegressor(
+    model = DropoutBooster(
         max_iter=5,
         learning_rate=0.8,
         dropout_rate=0.2,
@@ -88,14 +79,14 @@ def test_brat_d_hist_fit_predict_smoke():
     assert np.all(model.in_bag_matrix_)
 
 
-def test_brat_d_hist_caches_training_tree_predictions():
+def test_dropout_booster_caches_training_tree_predictions():
     X, y = make_regression(
         n_samples=50,
         n_features=2,
         noise=0.5,
         random_state=0,
     )
-    model = BRATDHistGradientBoostingRegressor(
+    model = DropoutBooster(
         max_iter=4,
         learning_rate=0.7,
         dropout_rate=0.0,
@@ -124,7 +115,7 @@ def test_brat_d_hist_caches_training_tree_predictions():
     assert model.fit_diagnostics_["residual_cache_hit_rounds"] == 3
 
 
-def test_brat_d_hist_is_deterministic():
+def test_dropout_booster_is_deterministic():
     X, y = make_regression(
         n_samples=80,
         n_features=3,
@@ -141,14 +132,14 @@ def test_brat_d_hist_is_deterministic():
         random_state=0,
     )
 
-    first = BRATDHistGradientBoostingRegressor(**params).fit(X, y).predict(X)
-    second = BRATDHistGradientBoostingRegressor(**params).fit(X, y).predict(X)
+    first = DropoutBooster(**params).fit(X, y).predict(X)
+    second = DropoutBooster(**params).fit(X, y).predict(X)
 
     np.testing.assert_allclose(first, second)
 
 
-def test_brat_d_hist_rejects_unsupported_sklearn_modes():
-    model = BRATDHistGradientBoostingRegressor(early_stopping=True)
+def test_dropout_booster_rejects_unsupported_sklearn_modes():
+    model = DropoutBooster(early_stopping=True)
 
     with pytest.raises(ValueError, match="early_stopping"):
         model.fit([[0.0], [1.0]], [0.0, 1.0])
@@ -168,14 +159,12 @@ def test_brat_d_hist_rejects_unsupported_sklearn_modes():
         ({"max_iter": 0}, "max_iter"),
         ({"max_bins": 1}, "max_bins"),
         ({"max_bins": 256}, "max_bins"),
-        ({"nystrom_subsample_rate": 0.0}, "nystrom_subsample_rate"),
-        ({"nystrom_subsample_rate": 1.5}, "nystrom_subsample_rate"),
     ],
 )
-def test_brat_d_hist_rejects_unsupported_parameters(params, message):
+def test_dropout_booster_rejects_unsupported_parameters(params, message):
     X = np.array([[0.0], [1.0], [2.0]])
     y = np.array([0.0, 1.0, 2.0])
-    model = BRATDHistGradientBoostingRegressor(
+    model = DropoutBooster(
         early_stopping=False,
         **params,
     )
@@ -184,10 +173,10 @@ def test_brat_d_hist_rejects_unsupported_parameters(params, message):
         model.fit(X, y)
 
 
-def test_brat_d_hist_rejects_invalid_sample_weight():
+def test_dropout_booster_rejects_invalid_sample_weight():
     X = np.array([[0.0], [1.0], [2.0]])
     y = np.array([0.0, 1.0, 2.0])
-    model = BRATDHistGradientBoostingRegressor(
+    model = DropoutBooster(
         max_iter=2,
         min_samples_leaf=1,
         early_stopping=False,
@@ -200,14 +189,14 @@ def test_brat_d_hist_rejects_invalid_sample_weight():
         model.fit(X, y, sample_weight=[1.0, -1.0, 1.0])
 
 
-def test_brat_d_hist_predict_applies_signal_correction():
+def test_dropout_booster_predict_applies_signal_correction():
     X, y = make_regression(
         n_samples=90,
         n_features=2,
         noise=0.5,
         random_state=0,
     )
-    model = BRATDHistGradientBoostingRegressor(
+    model = DropoutBooster(
         max_iter=6,
         learning_rate=0.7,
         dropout_rate=0.2,
@@ -231,7 +220,7 @@ def test_brat_d_hist_predict_applies_signal_correction():
     np.testing.assert_allclose(model.predict(X_eval), expected)
 
 
-def test_brat_d_hist_row_subsampling_is_deterministic():
+def test_dropout_booster_row_subsampling_is_deterministic():
     X, y = make_regression(
         n_samples=90,
         n_features=2,
@@ -249,8 +238,8 @@ def test_brat_d_hist_row_subsampling_is_deterministic():
         random_state=0,
     )
 
-    first = BRATDHistGradientBoostingRegressor(**params).fit(X, y)
-    second = BRATDHistGradientBoostingRegressor(**params).fit(X, y)
+    first = DropoutBooster(**params).fit(X, y)
+    second = DropoutBooster(**params).fit(X, y)
 
     expected_rows_per_tree = int(np.ceil(params["subsample_rate"] * X.shape[0]))
     np.testing.assert_array_equal(first.in_bag_matrix_, second.in_bag_matrix_)
@@ -260,7 +249,7 @@ def test_brat_d_hist_row_subsampling_is_deterministic():
     )
 
 
-def test_brat_d_hist_cell_metadata_compresses_duplicate_bins():
+def test_dropout_booster_cell_metadata_compresses_duplicate_bins():
     X = np.array(
         [
             [0.0, 0.0],
@@ -272,7 +261,7 @@ def test_brat_d_hist_cell_metadata_compresses_duplicate_bins():
         ]
     )
     y = np.array([0.0, 0.1, 1.0, 1.1, 2.0, 2.1])
-    model = BRATDHistGradientBoostingRegressor(
+    model = DropoutBooster(
         max_iter=3,
         learning_rate=0.5,
         dropout_rate=0.0,
@@ -291,7 +280,7 @@ def test_brat_d_hist_cell_metadata_compresses_duplicate_bins():
     assert cell_indices[4] == cell_indices[5]
 
 
-def test_brat_d_hist_prepare_inference_uses_centered_residual_variance():
+def test_dropout_booster_prepare_inference_uses_centered_residual_variance():
     X, y = make_regression(
         n_samples=80,
         n_features=2,
@@ -304,7 +293,7 @@ def test_brat_d_hist_prepare_inference_uses_centered_residual_variance():
         test_size=0.25,
         random_state=0,
     )
-    model = BRATDHistGradientBoostingRegressor(
+    model = DropoutBooster(
         max_iter=5,
         learning_rate=0.6,
         dropout_rate=0.25,
@@ -324,7 +313,7 @@ def test_brat_d_hist_prepare_inference_uses_centered_residual_variance():
     assert model.inference_method_ == "histogram_cell"
 
 
-def test_brat_d_hist_intervals_prepare_from_training_data_by_default():
+def test_dropout_booster_intervals_prepare_from_training_data_by_default():
     X, y = make_regression(
         n_samples=80,
         n_features=2,
@@ -337,7 +326,7 @@ def test_brat_d_hist_intervals_prepare_from_training_data_by_default():
         test_size=0.25,
         random_state=0,
     )
-    model = BRATDHistGradientBoostingRegressor(
+    model = DropoutBooster(
         max_iter=5,
         learning_rate=0.6,
         dropout_rate=0.25,
@@ -356,7 +345,7 @@ def test_brat_d_hist_intervals_prepare_from_training_data_by_default():
     assert np.all(ci_lower <= ci_upper)
 
 
-def test_brat_d_hist_interval_call_can_use_calibration_data():
+def test_dropout_booster_interval_call_can_use_calibration_data():
     X, y = make_regression(
         n_samples=90,
         n_features=2,
@@ -369,7 +358,7 @@ def test_brat_d_hist_interval_call_can_use_calibration_data():
         test_size=0.25,
         random_state=0,
     )
-    model = BRATDHistGradientBoostingRegressor(
+    model = DropoutBooster(
         max_iter=5,
         learning_rate=0.6,
         dropout_rate=0.25,
@@ -394,11 +383,11 @@ def test_brat_d_hist_interval_call_can_use_calibration_data():
         model.confidence_interval(X_calib[:4], X_calib=X_calib)
 
 
-def test_brat_d_hist_cached_weight_norms_match_direct_solve_for_cells():
+def test_dropout_booster_cached_weight_norms_match_direct_solve_for_cells():
     levels = np.linspace(0.0, 1.0, 12)
     X = np.column_stack([levels, levels])
     y = np.sin(2 * np.pi * levels) + 0.2 * levels
-    model = BRATDHistGradientBoostingRegressor(
+    model = DropoutBooster(
         max_iter=6,
         learning_rate=0.5,
         dropout_rate=0.25,
@@ -431,7 +420,7 @@ def test_brat_d_hist_cached_weight_norms_match_direct_solve_for_cells():
     np.testing.assert_allclose(cached_norms, direct_norms)
 
 
-def test_brat_d_hist_interval_widths_are_ordered():
+def test_dropout_booster_interval_widths_are_ordered():
     X, y = make_regression(
         n_samples=120,
         n_features=2,
@@ -444,7 +433,7 @@ def test_brat_d_hist_interval_widths_are_ordered():
         test_size=0.25,
         random_state=0,
     )
-    model = BRATDHistGradientBoostingRegressor(
+    model = DropoutBooster(
         max_iter=8,
         learning_rate=0.6,
         dropout_rate=0.25,
@@ -495,7 +484,7 @@ def test_brat_d_hist_interval_widths_are_ordered():
         model.predict_intervals(X_calib[:2], mode="confidence", calibrated=True)
 
 
-def test_brat_d_hist_observed_cell_inference_smoke():
+def test_dropout_booster_observed_cell_inference_smoke():
     X, y = make_regression(
         n_samples=120,
         n_features=2,
@@ -508,7 +497,7 @@ def test_brat_d_hist_observed_cell_inference_smoke():
         test_size=0.25,
         random_state=0,
     )
-    model = BRATDHistGradientBoostingRegressor(
+    model = DropoutBooster(
         max_iter=8,
         learning_rate=0.6,
         dropout_rate=0.25,
@@ -551,64 +540,3 @@ def test_brat_d_hist_observed_cell_inference_smoke():
         train_norms,
         model.cell_weight_norms_[train_cell_indices],
     )
-
-
-def test_brat_d_hist_nystrom_inference_uses_landmark_sketch():
-    levels = np.linspace(0.0, 1.0, 40)
-    X = np.column_stack([levels, levels])
-    y = np.sin(2 * np.pi * levels) + 0.2 * levels
-    model = BRATDHistGradientBoostingRegressor(
-        max_iter=6,
-        learning_rate=0.5,
-        dropout_rate=0.25,
-        nystrom_subsample_rate=0.2,
-        max_leaf_nodes=8,
-        min_samples_leaf=1,
-        max_bins=32,
-        random_state=0,
-    ).fit(X, y)
-
-    model.prepare_inference()
-
-    assert model.inference_method_ == "histogram_cell_nystrom"
-    assert 0 < model.nystrom_landmark_count_ < model.observed_cells_.shape[0]
-    assert model.nystrom_sigma_matrix_.shape == (
-        model.nystrom_landmark_count_,
-        model.nystrom_landmark_count_,
-    )
-
-    landmark_vectors = model.cell_kernel_matrix_[:, model.nystrom_landmark_indices_]
-    np.testing.assert_allclose(
-        model.cell_weight_norms_,
-        nystrom_weight_norms(landmark_vectors, model.nystrom_sigma_matrix_),
-    )
-
-    train_norms = model.weight_norms(X[:8])
-    np.testing.assert_allclose(
-        train_norms,
-        model.cell_weight_norms_[model.train_cell_indices_[:8]],
-    )
-    assert np.all(np.isfinite(train_norms))
-    assert np.all(train_norms >= 0)
-
-
-def test_brat_d_hist_nystrom_rate_one_falls_back_to_exact_cell_solve():
-    levels = np.linspace(0.0, 1.0, 20)
-    X = np.column_stack([levels, levels])
-    y = np.sin(2 * np.pi * levels)
-    model = BRATDHistGradientBoostingRegressor(
-        max_iter=4,
-        learning_rate=0.6,
-        dropout_rate=0.2,
-        nystrom_subsample_rate=1.0,
-        max_leaf_nodes=6,
-        min_samples_leaf=1,
-        max_bins=16,
-        random_state=0,
-    ).fit(X, y)
-
-    model.prepare_inference()
-
-    assert model.inference_method_ == "histogram_cell"
-    assert model.nystrom_landmark_count_ == model.observed_cells_.shape[0]
-    assert not hasattr(model, "nystrom_sigma_matrix_")

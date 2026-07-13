@@ -4,12 +4,11 @@ from sklearn.base import clone
 from sklearn.datasets import make_regression
 from sklearn.model_selection import train_test_split
 
-from boulevard.estimators.sklearn._nystrom import nystrom_weight_norms
-from boulevard.estimators.sklearn.bratp import BRATPHistGradientBoostingRegressor
+from boulevard.estimators.sklearn.parallel import ParallelBooster
 
 
-def test_brat_p_hist_skeleton_is_sklearn_cloneable():
-    model = BRATPHistGradientBoostingRegressor(
+def test_parallel_booster_skeleton_is_sklearn_cloneable():
+    model = ParallelBooster(
         n_rounds=3,
         trees_per_round=4,
         subsample_rate=0.7,
@@ -17,7 +16,6 @@ def test_brat_p_hist_skeleton_is_sklearn_cloneable():
         early_stopping=False,
         random_state=0,
         n_jobs=2,
-        nystrom_subsample_rate=0.25,
     )
 
     cloned = clone(model)
@@ -27,23 +25,16 @@ def test_brat_p_hist_skeleton_is_sklearn_cloneable():
     assert cloned.subsample_rate == 0.7
     assert cloned.max_leaf_nodes == 5
     assert cloned.n_jobs == 2
-    assert cloned.nystrom_subsample_rate == 0.25
 
 
-def test_brat_p_hist_nystrom_default_is_all_landmarks():
-    model = BRATPHistGradientBoostingRegressor()
-
-    assert model.nystrom_subsample_rate == 1.0
-
-
-def test_brat_p_hist_fit_predict_smoke():
+def test_parallel_booster_fit_predict_smoke():
     X, y = make_regression(
         n_samples=80,
         n_features=3,
         noise=1.0,
         random_state=0,
     )
-    model = BRATPHistGradientBoostingRegressor(
+    model = ParallelBooster(
         n_rounds=3,
         trees_per_round=2,
         max_leaf_nodes=4,
@@ -76,7 +67,7 @@ def test_brat_p_hist_fit_predict_smoke():
     assert diagnostics["sampled_training_rows"] == X.shape[0] * total_trees
 
 
-def test_brat_p_hist_residual_formula():
+def test_parallel_booster_residual_formula():
     y = np.array([10.0, 20.0])
     slot_prediction_sums = np.array(
         [
@@ -87,7 +78,7 @@ def test_brat_p_hist_residual_formula():
     )
     current_round_prediction_sum = np.array([1.0, 3.0])
 
-    model = BRATPHistGradientBoostingRegressor(
+    model = ParallelBooster(
         n_rounds=3,
         trees_per_round=3,
     )
@@ -136,8 +127,8 @@ def test_brat_p_hist_residual_formula():
     np.testing.assert_allclose(round_residuals, expected_round_residuals)
 
 
-def test_brat_p_hist_fit_uses_frozen_previous_round_sums():
-    class RecordingBRATP(BRATPHistGradientBoostingRegressor):
+def test_parallel_booster_fit_uses_frozen_previous_round_sums():
+    class RecordingParallelBooster(ParallelBooster):
         def _residuals_for_round_binned(
             self,
             y,
@@ -163,7 +154,7 @@ def test_brat_p_hist_fit_uses_frozen_previous_round_sums():
         noise=0.5,
         random_state=0,
     )
-    model = RecordingBRATP(
+    model = RecordingParallelBooster(
         n_rounds=2,
         trees_per_round=3,
         max_leaf_nodes=5,
@@ -184,14 +175,14 @@ def test_brat_p_hist_fit_uses_frozen_previous_round_sums():
     assert np.any(second_round_snapshots[0])
 
 
-def test_brat_p_hist_prediction_uses_round_slot_aggregation():
+def test_parallel_booster_prediction_uses_round_slot_aggregation():
     X, y = make_regression(
         n_samples=90,
         n_features=2,
         noise=0.5,
         random_state=0,
     )
-    model = BRATPHistGradientBoostingRegressor(
+    model = ParallelBooster(
         n_rounds=3,
         trees_per_round=3,
         max_leaf_nodes=5,
@@ -210,7 +201,7 @@ def test_brat_p_hist_prediction_uses_round_slot_aggregation():
     np.testing.assert_allclose(model.predict(X_eval), expected)
 
 
-def test_brat_p_hist_is_deterministic():
+def test_parallel_booster_is_deterministic():
     X, y = make_regression(
         n_samples=80,
         n_features=3,
@@ -226,13 +217,13 @@ def test_brat_p_hist_is_deterministic():
         random_state=0,
     )
 
-    first = BRATPHistGradientBoostingRegressor(**params).fit(X, y).predict(X)
-    second = BRATPHistGradientBoostingRegressor(**params).fit(X, y).predict(X)
+    first = ParallelBooster(**params).fit(X, y).predict(X)
+    second = ParallelBooster(**params).fit(X, y).predict(X)
 
     np.testing.assert_allclose(first, second)
 
 
-def test_brat_p_hist_parallel_fit_matches_serial_fit():
+def test_parallel_booster_parallel_fit_matches_serial_fit():
     X, y = make_regression(
         n_samples=90,
         n_features=3,
@@ -250,8 +241,8 @@ def test_brat_p_hist_parallel_fit_matches_serial_fit():
         drop_first_round=True,
     )
 
-    serial = BRATPHistGradientBoostingRegressor(**params, n_jobs=1).fit(X, y)
-    parallel = BRATPHistGradientBoostingRegressor(**params, n_jobs=2).fit(X, y)
+    serial = ParallelBooster(**params, n_jobs=1).fit(X, y)
+    parallel = ParallelBooster(**params, n_jobs=2).fit(X, y)
 
     np.testing.assert_allclose(serial.predict(X), parallel.predict(X))
     np.testing.assert_array_equal(serial.in_bag_matrix_, parallel.in_bag_matrix_)
@@ -262,14 +253,14 @@ def test_brat_p_hist_parallel_fit_matches_serial_fit():
     assert parallel.fit_diagnostics_["vectorized_residual_rounds"] == parallel.n_rounds
 
 
-def test_brat_p_hist_default_first_round_stays_serial_with_parallel_jobs():
+def test_parallel_booster_default_first_round_stays_serial_with_parallel_jobs():
     X, y = make_regression(
         n_samples=90,
         n_features=3,
         noise=1.0,
         random_state=0,
     )
-    model = BRATPHistGradientBoostingRegressor(
+    model = ParallelBooster(
         n_rounds=4,
         trees_per_round=3,
         subsample_rate=0.8,
@@ -301,14 +292,12 @@ def test_brat_p_hist_default_first_round_stays_serial_with_parallel_jobs():
         ({"n_jobs": 0}, "n_jobs"),
         ({"n_jobs": 1.5}, "n_jobs"),
         ({"n_jobs": True}, "n_jobs"),
-        ({"nystrom_subsample_rate": 0.0}, "nystrom_subsample_rate"),
-        ({"nystrom_subsample_rate": 1.5}, "nystrom_subsample_rate"),
     ],
 )
-def test_brat_p_hist_rejects_unsupported_parameters(params, message):
+def test_parallel_booster_rejects_unsupported_parameters(params, message):
     X = np.array([[0.0], [1.0], [2.0]])
     y = np.array([0.0, 1.0, 2.0])
-    model = BRATPHistGradientBoostingRegressor(
+    model = ParallelBooster(
         early_stopping=False,
         **params,
     )
@@ -317,7 +306,7 @@ def test_brat_p_hist_rejects_unsupported_parameters(params, message):
         model.fit(X, y)
 
 
-def test_brat_p_hist_intervals_smoke():
+def test_parallel_booster_intervals_smoke():
     X, y = make_regression(
         n_samples=120,
         n_features=2,
@@ -330,7 +319,7 @@ def test_brat_p_hist_intervals_smoke():
         test_size=0.25,
         random_state=0,
     )
-    model = BRATPHistGradientBoostingRegressor(
+    model = ParallelBooster(
         n_rounds=3,
         trees_per_round=2,
         max_leaf_nodes=5,
@@ -391,14 +380,14 @@ def test_brat_p_hist_intervals_smoke():
         model.predict_intervals(X_calib[:2], mode="confidence", calibrated=True)
 
 
-def test_brat_p_hist_cell_system_uses_parallel_scaling():
+def test_parallel_booster_cell_system_uses_parallel_scaling():
     X, y = make_regression(
         n_samples=90,
         n_features=2,
         noise=1.0,
         random_state=0,
     )
-    model = BRATPHistGradientBoostingRegressor(
+    model = ParallelBooster(
         n_rounds=3,
         trees_per_round=4,
         max_leaf_nodes=5,
@@ -437,62 +426,3 @@ def test_brat_p_hist_cell_system_uses_parallel_scaling():
         scaled_weights,
     )
     np.testing.assert_allclose(scaled_norms, model.trees_per_round * unscaled_norms)
-
-
-def test_brat_p_hist_nystrom_inference_uses_landmark_sketch():
-    levels = np.linspace(0.0, 1.0, 40)
-    X = np.column_stack([levels, levels])
-    y = np.sin(2 * np.pi * levels) + 0.2 * levels
-    model = BRATPHistGradientBoostingRegressor(
-        n_rounds=3,
-        trees_per_round=3,
-        nystrom_subsample_rate=0.2,
-        max_leaf_nodes=8,
-        min_samples_leaf=1,
-        max_bins=32,
-        random_state=0,
-    ).fit(X, y)
-
-    model.prepare_inference()
-
-    assert model.inference_method_ == "histogram_cell_nystrom"
-    assert 0 < model.nystrom_landmark_count_ < model.observed_cells_.shape[0]
-    assert model.nystrom_sigma_matrix_.shape == (
-        model.nystrom_landmark_count_,
-        model.nystrom_landmark_count_,
-    )
-
-    landmark_vectors = model.cell_kernel_matrix_[:, model.nystrom_landmark_indices_]
-    np.testing.assert_allclose(
-        model.cell_weight_norms_,
-        nystrom_weight_norms(landmark_vectors, model.nystrom_sigma_matrix_),
-    )
-
-    train_norms = model.weight_norms(X[:8])
-    np.testing.assert_allclose(
-        train_norms,
-        model.cell_weight_norms_[model.train_cell_indices_[:8]],
-    )
-    assert np.all(np.isfinite(train_norms))
-    assert np.all(train_norms >= 0)
-
-
-def test_brat_p_hist_nystrom_rate_one_falls_back_to_exact_cell_solve():
-    levels = np.linspace(0.0, 1.0, 20)
-    X = np.column_stack([levels, levels])
-    y = np.sin(2 * np.pi * levels)
-    model = BRATPHistGradientBoostingRegressor(
-        n_rounds=2,
-        trees_per_round=3,
-        nystrom_subsample_rate=1.0,
-        max_leaf_nodes=6,
-        min_samples_leaf=1,
-        max_bins=16,
-        random_state=0,
-    ).fit(X, y)
-
-    model.prepare_inference()
-
-    assert model.inference_method_ == "histogram_cell"
-    assert model.nystrom_landmark_count_ == model.observed_cells_.shape[0]
-    assert not hasattr(model, "nystrom_sigma_matrix_")
