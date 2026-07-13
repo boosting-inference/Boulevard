@@ -319,6 +319,20 @@ def test_explainable_booster_rejects_invalid_parameters(params, message):
         model.fit(X, y)
 
 
+def test_explainable_booster_warns_when_capacity_is_capped():
+    X, y, _ = _make_additive_data(n_samples=120)
+    model = ExplainableBooster(
+        max_rounds=1,
+        max_bins=8,
+        max_depth=6,
+        min_samples_leaf=1,
+        random_state=0,
+    )
+
+    with pytest.warns(UserWarning, match="tree capacity is capped"):
+        model.fit(X, y)
+
+
 def test_explainable_booster_rejects_nonfinite_input():
     X, y, _ = _make_additive_data(n_samples=20)
     X[0, 0] = np.nan

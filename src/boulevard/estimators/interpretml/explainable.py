@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import heapq
 import time
+import warnings
 from statistics import NormalDist
 from typing import Any
 
@@ -74,6 +75,7 @@ class ExplainableBooster(BaseEstimator, RegressorMixin):
             raise ValueError("ExplainableBooster currently requires finite numeric X.")
         if not np.all(np.isfinite(y)):
             raise ValueError("ExplainableBooster currently requires finite numeric y.")
+        self._warn_about_tree_capacity_caps(n_samples=X.shape[0])
 
         rng = np.random.default_rng(self.random_state)
         n_samples, n_features = X.shape
@@ -564,6 +566,30 @@ class ExplainableBooster(BaseEstimator, RegressorMixin):
         if self.max_depth is None:
             return int(self.max_leaves)
         return int(2**self.max_depth)
+
+    def _warn_about_tree_capacity_caps(self, *, n_samples: int) -> None:
+        caps: list[str] = []
+        if self.max_leaves_ > self.max_bins:
+            caps.append(f"max_bins allows at most about {self.max_bins} 1D leaves")
+
+        n_in_bag = max(1, int(np.ceil(self.subsample_rate * n_samples)))
+        sample_leaf_cap = max(1, n_in_bag // self.min_samples_leaf)
+        if self.max_leaves_ > sample_leaf_cap:
+            caps.append(
+                "subsample_rate and min_samples_leaf allow at most about "
+                f"{sample_leaf_cap} leaves per feature update"
+            )
+
+        if caps:
+            warnings.warn(
+                "ExplainableBooster tree capacity is capped before max_leaves="
+                f"{self.max_leaves_}: "
+                + "; ".join(caps)
+                + ". Increasing max_depth or max_leaves alone is unlikely to "
+                "change the fit.",
+                UserWarning,
+                stacklevel=2,
+            )
 
     def _fit_bin_edges(self, X: np.ndarray) -> list[np.ndarray]:
         edges: list[np.ndarray] = []

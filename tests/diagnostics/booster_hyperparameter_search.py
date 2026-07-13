@@ -207,11 +207,10 @@ def evaluate(
 
 def make_model(algorithm: str, params: dict[str, Any], *, seed: int) -> Any:
     if algorithm == "dropout":
-        return bd.DropoutBooster(**params, early_stopping=False, random_state=seed)
+        return bd.DropoutBooster(**params, random_state=seed)
     if algorithm == "parallel":
         return bd.ParallelBooster(
             **params,
-            early_stopping=False,
             random_state=seed,
             n_jobs=1,
         )

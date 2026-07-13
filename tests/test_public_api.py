@@ -30,7 +30,6 @@ def test_top_level_brat_d_is_sklearn_compatible():
         max_leaf_nodes=4,
         min_samples_leaf=4,
         max_bins=16,
-        early_stopping=False,
         random_state=0,
     )
 
@@ -49,7 +48,6 @@ def test_top_level_brat_p_is_sklearn_compatible():
         max_leaf_nodes=4,
         min_samples_leaf=4,
         max_bins=16,
-        early_stopping=False,
         random_state=0,
     )
 
@@ -87,7 +85,6 @@ def test_top_level_brat_d_user_workflow():
         max_leaf_nodes=4,
         min_samples_leaf=4,
         max_bins=16,
-        early_stopping=False,
         random_state=0,
     )
 
@@ -121,7 +118,6 @@ def test_top_level_brat_p_user_workflow():
         max_leaf_nodes=4,
         min_samples_leaf=4,
         max_bins=16,
-        early_stopping=False,
         random_state=0,
     )
 

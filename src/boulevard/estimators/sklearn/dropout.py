@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import inspect
 import time
+import warnings
 from typing import Any
 
 import numpy as np
@@ -53,7 +54,6 @@ class DropoutBooster(HistGradientBoostingRegressor):
         monotonic_cst: Any | None = None,
         interaction_cst: Any | None = None,
         warm_start: bool = False,
-        early_stopping: bool | str = False,
         scoring: str | None = "loss",
         validation_fraction: float | None = 0.1,
         n_iter_no_change: int = 10,
@@ -75,7 +75,7 @@ class DropoutBooster(HistGradientBoostingRegressor):
             monotonic_cst=monotonic_cst,
             interaction_cst=interaction_cst,
             warm_start=warm_start,
-            early_stopping=early_stopping,
+            early_stopping=False,
             scoring=scoring,
             validation_fraction=validation_fraction,
             n_iter_no_change=n_iter_no_change,
@@ -121,6 +121,10 @@ class DropoutBooster(HistGradientBoostingRegressor):
                 )
             if np.any(sample_weight < 0):
                 raise ValueError("sample_weight cannot contain negative values.")
+        self._warn_about_tree_capacity_caps(
+            n_samples=X.shape[0],
+            n_features=X.shape[1],
+        )
 
         n_threads = self._effective_n_threads()
         rng = np.random.default_rng(self.random_state)
@@ -485,10 +489,6 @@ class DropoutBooster(HistGradientBoostingRegressor):
             raise ValueError(
                 "warm_start is not supported for BRAT-D histogram fitting."
             )
-        if self.early_stopping not in (False, None):
-            raise ValueError(
-                "early_stopping must be False or None for BRAT-D histogram fitting."
-            )
         if self.categorical_features is not None:
             raise ValueError(
                 "categorical_features is not supported yet for BRAT-D histogram "
@@ -508,6 +508,42 @@ class DropoutBooster(HistGradientBoostingRegressor):
             raise ValueError("max_bins must be at least 2.")
         if self.max_bins > 255:
             raise ValueError("max_bins cannot exceed 255 for sklearn histogram trees.")
+
+    def _warn_about_tree_capacity_caps(
+        self,
+        *,
+        n_samples: int,
+        n_features: int,
+    ) -> None:
+        if self.max_leaf_nodes is None:
+            return
+
+        caps: list[str] = []
+        if self.max_depth is not None:
+            depth_leaf_cap = 2**self.max_depth
+            if self.max_leaf_nodes > depth_leaf_cap:
+                caps.append(f"max_depth allows at most {depth_leaf_cap} leaves")
+
+        n_in_bag = max(1, int(np.ceil(self.subsample_rate * n_samples)))
+        sample_leaf_cap = max(1, n_in_bag // self.min_samples_leaf)
+        if self.max_leaf_nodes > sample_leaf_cap:
+            caps.append(
+                "subsample_rate and min_samples_leaf allow at most about "
+                f"{sample_leaf_cap} leaves per tree"
+            )
+
+        if n_features == 1 and self.max_leaf_nodes > self.max_bins:
+            caps.append(f"max_bins allows at most about {self.max_bins} 1D leaves")
+
+        if caps:
+            warnings.warn(
+                "DropoutBooster tree capacity is capped before max_leaf_nodes="
+                f"{self.max_leaf_nodes}: "
+                + "; ".join(caps)
+                + ". Increasing max_leaf_nodes alone is unlikely to change the fit.",
+                UserWarning,
+                stacklevel=2,
+            )
 
     def _effective_n_threads(self) -> int:
         return 1

@@ -26,7 +26,6 @@ def test_dropout_booster_is_public_api():
         max_iter=3,
         learning_rate=0.4,
         dropout_rate=0.2,
-        early_stopping=False,
     )
 
     assert model.get_params()["max_iter"] == 3
@@ -45,7 +44,6 @@ def test_parallel_booster_is_public_api():
     model = bd.ParallelBooster(
         n_rounds=3,
         trees_per_round=2,
-        early_stopping=False,
     )
 
     assert model.get_params()["n_rounds"] == 3

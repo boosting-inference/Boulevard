@@ -13,7 +13,6 @@ def test_parallel_booster_skeleton_is_sklearn_cloneable():
         trees_per_round=4,
         subsample_rate=0.7,
         max_leaf_nodes=5,
-        early_stopping=False,
         random_state=0,
         n_jobs=2,
     )
@@ -25,6 +24,12 @@ def test_parallel_booster_skeleton_is_sklearn_cloneable():
     assert cloned.subsample_rate == 0.7
     assert cloned.max_leaf_nodes == 5
     assert cloned.n_jobs == 2
+    assert "early_stopping" not in model.get_params()
+
+
+def test_parallel_booster_does_not_expose_early_stopping():
+    with pytest.raises(TypeError, match="early_stopping"):
+        ParallelBooster(early_stopping=True)
 
 
 def test_parallel_booster_fit_predict_smoke():
@@ -298,11 +303,27 @@ def test_parallel_booster_rejects_unsupported_parameters(params, message):
     X = np.array([[0.0], [1.0], [2.0]])
     y = np.array([0.0, 1.0, 2.0])
     model = ParallelBooster(
-        early_stopping=False,
         **params,
     )
 
     with pytest.raises(ValueError, match=message):
+        model.fit(X, y)
+
+
+def test_parallel_booster_warns_when_capacity_is_capped():
+    X = np.linspace(0.0, 1.0, 200).reshape(-1, 1)
+    y = np.sin(2 * np.pi * X[:, 0])
+    model = ParallelBooster(
+        n_rounds=1,
+        trees_per_round=2,
+        max_depth=2,
+        max_leaf_nodes=32,
+        min_samples_leaf=1,
+        max_bins=16,
+        random_state=0,
+    )
+
+    with pytest.warns(UserWarning, match="tree capacity is capped"):
         model.fit(X, y)
 
 

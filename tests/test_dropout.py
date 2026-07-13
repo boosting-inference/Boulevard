@@ -13,7 +13,6 @@ def test_dropout_booster_skeleton_is_sklearn_cloneable():
         dropout_rate=0.2,
         subsample_rate=0.7,
         max_iter=3,
-        early_stopping=False,
         random_state=0,
     )
 
@@ -138,11 +137,11 @@ def test_dropout_booster_is_deterministic():
     np.testing.assert_allclose(first, second)
 
 
-def test_dropout_booster_rejects_unsupported_sklearn_modes():
-    model = DropoutBooster(early_stopping=True)
+def test_dropout_booster_does_not_expose_early_stopping():
+    assert "early_stopping" not in DropoutBooster().get_params()
 
-    with pytest.raises(ValueError, match="early_stopping"):
-        model.fit([[0.0], [1.0]], [0.0, 1.0])
+    with pytest.raises(TypeError, match="early_stopping"):
+        DropoutBooster(early_stopping=True)
 
 
 @pytest.mark.parametrize(
@@ -165,11 +164,26 @@ def test_dropout_booster_rejects_unsupported_parameters(params, message):
     X = np.array([[0.0], [1.0], [2.0]])
     y = np.array([0.0, 1.0, 2.0])
     model = DropoutBooster(
-        early_stopping=False,
         **params,
     )
 
     with pytest.raises(ValueError, match=message):
+        model.fit(X, y)
+
+
+def test_dropout_booster_warns_when_capacity_is_capped():
+    X = np.linspace(0.0, 1.0, 200).reshape(-1, 1)
+    y = np.sin(2 * np.pi * X[:, 0])
+    model = DropoutBooster(
+        max_iter=1,
+        max_depth=2,
+        max_leaf_nodes=32,
+        min_samples_leaf=1,
+        max_bins=16,
+        random_state=0,
+    )
+
+    with pytest.warns(UserWarning, match="tree capacity is capped"):
         model.fit(X, y)
 
 
@@ -179,7 +193,6 @@ def test_dropout_booster_rejects_invalid_sample_weight():
     model = DropoutBooster(
         max_iter=2,
         min_samples_leaf=1,
-        early_stopping=False,
     )
 
     with pytest.raises(ValueError, match="one-dimensional"):

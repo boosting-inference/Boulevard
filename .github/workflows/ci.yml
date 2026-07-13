@@ -40,7 +40,7 @@ jobs:
           python -m pip install -e ".[dev]"
 
       - name: Lint
-        run: python -m ruff check src tests examples docs README.md
+        run: python -m ruff check src tests examples README.md
 
       - name: Test
         run: python -m pytest -q
@@ -80,58 +80,66 @@ jobs:
           import boulevard as bd
 
           assert bd.__version__ == "0.1.0a1"
-          assert hasattr(bd, "BRATDHistGradientBoostingRegressor")
-          assert hasattr(bd, "BRATPHistGradientBoostingRegressor")
-          assert hasattr(bd, "IEBMRegressor")
+          assert hasattr(bd, "DropoutBooster")
+          assert hasattr(bd, "ParallelBooster")
+          assert hasattr(bd, "ExplainableBooster")
+          assert not hasattr(bd, "BRATDHistGradientBoostingRegressor")
+          assert not hasattr(bd, "BRATPHistGradientBoostingRegressor")
+          assert not hasattr(bd, "IEBMRegressor")
           assert not hasattr(bd, "XGBRegressor")
 
           rng = np.random.default_rng(0)
           X = rng.uniform(size=(90, 2))
           y = np.sin(2 * np.pi * X[:, 0]) + rng.normal(scale=0.1, size=90)
 
-          bratd = bd.BRATDHistGradientBoostingRegressor(
+          dropout = bd.DropoutBooster(
               max_iter=3,
               learning_rate=0.5,
               dropout_rate=0.2,
               max_leaf_nodes=4,
               min_samples_leaf=4,
               max_bins=16,
-              early_stopping=False,
               random_state=0,
           )
-          bratd.fit(X[:60], y[:60])
-          bratd.prepare_inference(X[60:], y[60:])
-          pred = bratd.predict(X[60:65])
-          lower, upper = bratd.confidence_interval(X[60:65])
+          dropout.fit(X[:60], y[:60])
+          dropout.prepare_inference(X[60:], y[60:])
+          lower, upper, pred = dropout.predict_intervals(
+              X[60:65],
+              mode="confidence",
+          )
           assert pred.shape == lower.shape == upper.shape == (5,)
           assert np.all(lower <= upper)
 
-          bratp = bd.BRATPHistGradientBoostingRegressor(
+          parallel = bd.ParallelBooster(
               n_rounds=2,
               trees_per_round=2,
               max_leaf_nodes=4,
               min_samples_leaf=4,
               max_bins=16,
-              early_stopping=False,
               random_state=0,
           )
-          bratp.fit(X[:60], y[:60])
-          bratp.prepare_inference(X[60:], y[60:])
-          pred = bratp.predict(X[60:65])
-          lower, upper = bratp.confidence_interval(X[60:65])
+          parallel.fit(X[:60], y[:60])
+          parallel.prepare_inference(X[60:], y[60:])
+          lower, upper, pred = parallel.predict_intervals(
+              X[60:65],
+              mode="confidence",
+          )
           assert pred.shape == lower.shape == upper.shape == (5,)
           assert np.all(lower <= upper)
 
-          iebm = bd.IEBMRegressor(
+          explainable = bd.ExplainableBooster(
               max_rounds=4,
               max_bins=8,
               max_depth=1,
               min_samples_leaf=4,
               random_state=0,
           )
-          iebm.fit(X[:60], y[:60])
-          iebm.prepare_inference(X[60:], y[60:])
-          lower, upper, pred = iebm.predict_intervals(X[60:65], mode="confidence")
+          explainable.fit(X[:60], y[:60])
+          explainable.prepare_inference(X[60:], y[60:])
+          lower, upper, pred = explainable.predict_intervals(
+              X[60:65],
+              mode="confidence",
+          )
           assert pred.shape == lower.shape == upper.shape == (5,)
           assert np.all(lower <= pred)
           assert np.all(pred <= upper)
