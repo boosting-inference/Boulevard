@@ -311,7 +311,7 @@ Low-dimensional starting point:
 model = bd.DropoutBooster(
     max_iter=700,
     learning_rate=0.8,
-    dropout_rate=0.1,
+    dropout_rate=0.3,
     subsample_rate=0.8,
     max_depth=6,
     max_leaf_nodes=64,
@@ -327,7 +327,7 @@ Higher-dimensional additive starting point:
 model = bd.DropoutBooster(
     max_iter=1000,
     learning_rate=3.0,
-    dropout_rate=0.0,
+    dropout_rate=0.1,
     subsample_rate=1.0,
     max_depth=10,
     max_leaf_nodes=256,
@@ -446,83 +446,3 @@ For a new dataset:
 6. If signal CI coverage is low but RMSE is already good, treat the signal CI as
    under-calibrated for that problem class.
 7. Keep a held-out diagnostic script or notebook for every real analysis.
-
-To rerun the recommendation search:
-
-```bash
-.venv/bin/python tests/diagnostics/booster_hyperparameter_search.py \
-  --trials 30 \
-  --random-search
-```
-
-## Development Notes
-
-The current package target is a small sklearn-compatible release. This release
-intentionally removes older pre-release aliases and backend placeholders.
-XGBoost, LightGBM, and CatBoost work can return later in separate
-backend-specific forks or integrations, but they are not part of this package
-surface now.
-
-Release cleanup decisions:
-
-- The dropout BRAT estimator was renamed to `DropoutBooster`.
-- The parallel BRAT estimator was renamed to `ParallelBooster`.
-- The EBM-family estimator was renamed to `ExplainableBooster`.
-- The earlier inference sketching prototype was removed from BRAT estimators.
-- Truncation was removed from `ExplainableBooster`.
-- Heavy diagnostic scripts were replaced by `examples/quickstart.py` and
-  `examples/boulevard_boosters_demo.ipynb`.
-- The release docs avoid advertising unsupported backend families.
-
-Implementation notes:
-
-- `DropoutBooster` and `ParallelBooster` use scikit-learn histogram-tree private
-  internals for prebinning and tree fitting. This is why the scikit-learn
-  dependency is pinned to the tested private API series.
-- Both histogram estimators cache training tree predictions during fitting to
-  avoid repeated old-tree traversal when constructing residuals.
-- For inference, histogram estimators compress repeated binned rows into
-  observed multidimensional cells. Interval weight norms are solved once for the
-  observed cells, then query points reuse cached cell norms when they land in an
-  observed cell.
-- `ExplainableBooster` uses a pure Python/NumPy one-dimensional tree update.
-  InterpretML's native EBM implementation remains faster because its update loop
-  is compiled, but the Boulevard implementation is easier to audit and does not
-  patch private InterpretML modules.
-
-## Current Scope And Limitations
-
-- Numeric squared-error regression only.
-- sklearn-compatible estimator APIs.
-- Experimental asymptotic intervals.
-- No categorical feature handling.
-- No XGBoost, LightGBM, or CatBoost backend in the first release.
-- `DropoutBooster` and `ParallelBooster` depend on scikit-learn private
-  histogram-gradient-boosting internals.
-- The scikit-learn dependency range is intentionally pinned to the tested
-  private API series.
-
-## Release Checks
-
-Before cutting a release:
-
-```bash
-.venv/bin/python -m ruff check src tests examples README.md
-.venv/bin/python -m pytest -q
-.venv/bin/python examples/quickstart.py
-.venv/bin/jupyter nbconvert --to notebook --execute \
-  examples/boulevard_boosters_demo.ipynb \
-  --output /private/tmp/boulevard_boosters_demo_executed.ipynb \
-  --ExecutePreprocessor.timeout=120
-.venv/bin/python -m build --sdist --wheel
-```
-
-The wheel contents should contain only the release modules:
-
-```text
-boulevard/__init__.py
-boulevard/estimators/interpretml/explainable.py
-boulevard/estimators/sklearn/dropout.py
-boulevard/estimators/sklearn/parallel.py
-boulevard/intervals/asymptotic.py
-```
