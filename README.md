@@ -68,13 +68,16 @@ algebra used by interval methods. If it is omitted, interval methods prepare
 inference on first use with the training data. A held-out calibration set is
 usually preferable for variance estimation.
 
-Runnable examples:
+Runnable examples are included in the source repository:
 
 ```bash
+git clone https://github.com/boosting-inference/Boulevard.git
+cd Boulevard
+pip install -e ".[examples]"
 python examples/quickstart.py
 ```
 
-Open the broader demo notebook:
+Open the broader demo notebook from the source repository:
 
 ```text
 examples/boulevard_boosters_demo.ipynb
