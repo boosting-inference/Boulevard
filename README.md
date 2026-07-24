@@ -120,7 +120,7 @@ Setup:
 - Baselines: `HGBR` is sklearn's `HistGradientBoostingRegressor`. Additive
   InterpretML EBM is the InterpretML EBM with `interactions=0`.
 
-Best tuned scores:
+Best tuned scores via Optuna, 30 trials per model:
 
 | Model | Mean Normalized Validation RMSE | Mean Rank | Best Trial Total Fit Seconds |
 | --- | ---: | ---: | ---: |
@@ -133,7 +133,7 @@ Best tuned scores:
 | Extra Trees | 0.449 | 5.23 | 267.9 |
 | InterpretML EBM | 0.455 | 5.62 | 692.7 |
 | `DropoutBooster` | 0.466 | 8.00 | 892.1 |
-| Additive InterpretML EBM | 0.528 | 8.54 | 72.3 |
+| No-Interaction Additive InterpretML EBM | 0.528 | 8.54 | 72.3 |
 | `ExplainableBooster` | 0.680 | 10.92 | 297.6 |
 
 ![Best tuned score across TabArena regression/lite datasets](assets/tabarena-regression-lite/best_score_bar.png)
