@@ -1,0 +1,5 @@
+include CITATION.cff
+include SKILLS.md
+recursive-include assets *.png
+recursive-include examples *.ipynb *.py
+recursive-include tests *.py

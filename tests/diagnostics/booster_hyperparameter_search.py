@@ -24,10 +24,11 @@ import csv
 import json
 import os
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import numpy as np
 from sklearn.model_selection import train_test_split

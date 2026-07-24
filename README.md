@@ -136,13 +136,13 @@ Best tuned scores via Optuna, 30 trials per model:
 | No-Interaction Additive InterpretML EBM | 0.528 | 8.54 | 72.3 |
 | `ExplainableBooster` | 0.680 | 10.92 | 297.6 |
 
-![Best tuned score across TabArena regression/lite datasets](assets/tabarena-regression-lite/best_score_bar.png)
+![Best tuned score across TabArena regression/lite datasets](https://raw.githubusercontent.com/boosting-inference/Boulevard/main/assets/tabarena-regression-lite/best_score_bar.png)
 
-![Accuracy-time tradeoff across tuned models](assets/tabarena-regression-lite/accuracy_time_scatter.png)
+![Accuracy-time tradeoff across tuned models](https://raw.githubusercontent.com/boosting-inference/Boulevard/main/assets/tabarena-regression-lite/accuracy_time_scatter.png)
 
-![Per-dataset rank heatmap](assets/tabarena-regression-lite/per_dataset_rank_heatmap.png)
+![Per-dataset rank heatmap](https://raw.githubusercontent.com/boosting-inference/Boulevard/main/assets/tabarena-regression-lite/per_dataset_rank_heatmap.png)
 
-![Optuna best-so-far curves](assets/tabarena-regression-lite/best_so_far_curve.png)
+![Optuna best-so-far curves](https://raw.githubusercontent.com/boosting-inference/Boulevard/main/assets/tabarena-regression-lite/best_so_far_curve.png)
 
 The main takeaway is that `ParallelBooster` is the strongest current Boulevard
 predictive model in this benchmark, close to sklearn HGBR and random forests but
@@ -367,7 +367,7 @@ Low-dimensional starting point:
 model = bd.DropoutBooster(
     max_iter=700,
     learning_rate=0.8,
-    dropout_rate=0.3,
+    dropout_rate=0.1,
     subsample_rate=0.8,
     max_depth=6,
     max_leaf_nodes=64,
@@ -502,3 +502,29 @@ For a new dataset:
 6. If signal CI coverage is low but RMSE is already good, treat the signal CI as
    under-calibrated for that problem class.
 7. Keep a held-out diagnostic script or notebook for every real analysis.
+
+## Citation
+
+If you use Boulevard, cite the software and the method paper most closely tied
+to the estimator you use. A machine-readable citation file is provided in
+`CITATION.cff`.
+
+- Boulevard regularization:
+  Yichen Zhou and Giles Hooker. 2022. "Boulevard: Regularized Stochastic
+  Gradient Boosted Trees and Their Limiting Distribution." Journal of Machine
+  Learning Research, 23(183):1-44.
+- `DropoutBooster` and `ParallelBooster`:
+  Haimo Fang, Kevin Tan, and Giles Hooker. 2025. "Statistical Inference for
+  Gradient Boosting Regression." Advances in Neural Information Processing
+  Systems 38.
+- `ExplainableBooster`:
+  Haimo Fang, Kevin Tan, Jonathan Pipping, and Giles Hooker. 2026. "Statistical
+  Inference for Explainable Boosting Machines." AISTATS 2026.
+- TabArena benchmark results:
+  Nick Erickson, Lennart Purucker, Andrej Tschalzev, David Holzmueller, Prateek
+  Mutalik Desai, David Salinas, and Frank Hutter. 2025. "TabArena: A Living
+  Benchmark for Machine Learning on Tabular Data." NeurIPS 2025.
+- Optuna tuning runs:
+  Takuya Akiba, Shotaro Sano, Toshihiko Yanase, Takeru Ohta, and Masanori
+  Koyama. 2019. "Optuna: A Next-generation Hyperparameter Optimization
+  Framework." KDD 2019.

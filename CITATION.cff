@@ -1,0 +1,94 @@
+cff-version: 1.2.0
+message: "If you use Boulevard, please cite the software and the relevant method papers."
+title: "Boulevard"
+version: "0.1.0a1"
+type: software
+license: "MIT"
+url: "https://github.com/boosting-inference/Boulevard"
+abstract: "Scikit-learn-compatible Boulevard and BRAT-style boosting estimators with uncertainty intervals."
+authors:
+  - family-names: "Zhou"
+    given-names: "Yichen"
+  - family-names: "Tan"
+    given-names: "Kevin"
+  - family-names: "Hooker"
+    given-names: "Giles"
+  - family-names: "Fang"
+    given-names: "Haimo"
+references:
+  - type: article
+    title: "Boulevard: Regularized Stochastic Gradient Boosted Trees and Their Limiting Distribution"
+    authors:
+      - family-names: "Zhou"
+        given-names: "Yichen"
+      - family-names: "Hooker"
+        given-names: "Giles"
+    journal: "Journal of Machine Learning Research"
+    year: 2022
+    volume: 23
+    issue: 183
+    start: 1
+    end: 44
+    url: "https://jmlr.org/papers/v23/21-0078.html"
+  - type: conference-paper
+    title: "Statistical Inference for Gradient Boosting Regression"
+    authors:
+      - family-names: "Fang"
+        given-names: "Haimo"
+      - family-names: "Tan"
+        given-names: "Kevin"
+      - family-names: "Hooker"
+        given-names: "Giles"
+    conference: "Advances in Neural Information Processing Systems"
+    year: 2025
+    url: "https://papers.neurips.cc/paper_files/paper/2025/hash/2f383b17f62bb308b50f20b4e679c9de-Abstract-Conference.html"
+  - type: conference-paper
+    title: "Statistical Inference for Explainable Boosting Machines"
+    authors:
+      - family-names: "Fang"
+        given-names: "Haimo"
+      - family-names: "Tan"
+        given-names: "Kevin"
+      - family-names: "Pipping"
+        given-names: "Jonathan"
+      - family-names: "Hooker"
+        given-names: "Giles"
+    conference: "International Conference on Artificial Intelligence and Statistics"
+    year: 2026
+    url: "https://arxiv.org/abs/2601.18857"
+  - type: conference-paper
+    title: "TabArena: A Living Benchmark for Machine Learning on Tabular Data"
+    authors:
+      - family-names: "Erickson"
+        given-names: "Nick"
+      - family-names: "Purucker"
+        given-names: "Lennart"
+      - family-names: "Tschalzev"
+        given-names: "Andrej"
+      - family-names: "Holzmueller"
+        given-names: "David"
+      - family-names: "Desai"
+        given-names: "Prateek Mutalik"
+      - family-names: "Salinas"
+        given-names: "David"
+      - family-names: "Hutter"
+        given-names: "Frank"
+    conference: "Advances in Neural Information Processing Systems"
+    year: 2025
+    url: "https://arxiv.org/abs/2506.16791"
+  - type: conference-paper
+    title: "Optuna: A Next-generation Hyperparameter Optimization Framework"
+    authors:
+      - family-names: "Akiba"
+        given-names: "Takuya"
+      - family-names: "Sano"
+        given-names: "Shotaro"
+      - family-names: "Yanase"
+        given-names: "Toshihiko"
+      - family-names: "Ohta"
+        given-names: "Takeru"
+      - family-names: "Koyama"
+        given-names: "Masanori"
+    conference: "ACM SIGKDD International Conference on Knowledge Discovery and Data Mining"
+    year: 2019
+    doi: "10.1145/3292500.3330701"
