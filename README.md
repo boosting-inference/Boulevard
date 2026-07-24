@@ -136,13 +136,13 @@ Best tuned scores via Optuna, 30 trials per model:
 | No-Interaction Additive InterpretML EBM | 0.528 | 8.54 | 72.3 |
 | `ExplainableBooster` | 0.680 | 10.92 | 297.6 |
 
-![Best tuned score across TabArena regression/lite datasets](https://raw.githubusercontent.com/boosting-inference/Boulevard/main/assets/tabarena-regression-lite/best_score_bar.png)
+![Best tuned score across TabArena regression/lite datasets](assets/tabarena-regression-lite/best_score_bar.png)
 
-![Accuracy-time tradeoff across tuned models](https://raw.githubusercontent.com/boosting-inference/Boulevard/main/assets/tabarena-regression-lite/accuracy_time_scatter.png)
+![Accuracy-time tradeoff across tuned models](assets/tabarena-regression-lite/accuracy_time_scatter.png)
 
-![Per-dataset rank heatmap](https://raw.githubusercontent.com/boosting-inference/Boulevard/main/assets/tabarena-regression-lite/per_dataset_rank_heatmap.png)
+![Per-dataset rank heatmap](assets/tabarena-regression-lite/per_dataset_rank_heatmap.png)
 
-![Optuna best-so-far curves](https://raw.githubusercontent.com/boosting-inference/Boulevard/main/assets/tabarena-regression-lite/best_so_far_curve.png)
+![Optuna best-so-far curves](assets/tabarena-regression-lite/best_so_far_curve.png)
 
 The main takeaway is that `ParallelBooster` is the strongest current Boulevard
 predictive model in this benchmark, close to sklearn HGBR and random forests but
