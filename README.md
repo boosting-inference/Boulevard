@@ -95,6 +95,62 @@ intervals as diagnostic unless you validate coverage in a problem-specific
 simulation. Prediction intervals are currently the safer interval type for noisy
 outcome uncertainty.
 
+## TabArena Regression Benchmark
+
+We also ran a local performance-positioning benchmark against common tree-based
+tabular models on TabArena's regression/lite datasets. This benchmark is meant
+to show where the current Boulevard estimators sit relative to existing
+tree-based prediction tools; it is not an official TabArena leaderboard
+submission.
+
+Setup:
+
+- Data: 13 TabArena regression/lite datasets from the `r0f0` split:
+  `Another-Dataset-on-used-Fiat-500`, `Food_Delivery_Time`, `QSAR-TID-11`,
+  `QSAR_fish_toxicity`, `airfoil_self_noise`,
+  `concrete_compressive_strength`, `diamonds`,
+  `healthcare_insurance_expenses`, `houses`, `miami_housing`,
+  `physiochemical_protein`, `superconductivity`, and `wine_quality`.
+- Evaluation: each TabArena training fold was split into an inner training set
+  and validation set. The TabArena test fold was not used.
+- Tuning: 30 Optuna trials per model on the same 13 datasets.
+- Score: mean normalized validation RMSE. For each dataset,
+  `normalized_RMSE = RMSE / std(y_val)`, then scores are averaged across
+  datasets. Lower is better.
+- Baselines: `HGBR` is sklearn's `HistGradientBoostingRegressor`. Additive
+  InterpretML EBM is the InterpretML EBM with `interactions=0`.
+
+Best tuned scores:
+
+| Model | Mean Normalized Validation RMSE | Mean Rank | Best Trial Total Fit Seconds |
+| --- | ---: | ---: | ---: |
+| CatBoost | 0.432 | 4.31 | 305.9 |
+| XGBoost | 0.433 | 3.38 | 61.2 |
+| LightGBM | 0.437 | 3.77 | 25.9 |
+| HGBR | 0.441 | 5.31 | 265.5 |
+| `ParallelBooster` | 0.447 | 5.69 | 197.2 |
+| Random Forest | 0.448 | 5.23 | 469.7 |
+| Extra Trees | 0.449 | 5.23 | 267.9 |
+| InterpretML EBM | 0.455 | 5.62 | 692.7 |
+| `DropoutBooster` | 0.466 | 8.00 | 892.1 |
+| Additive InterpretML EBM | 0.528 | 8.54 | 72.3 |
+| `ExplainableBooster` | 0.680 | 10.92 | 297.6 |
+
+![Best tuned score across TabArena regression/lite datasets](assets/tabarena-regression-lite/best_score_bar.png)
+
+![Accuracy-time tradeoff across tuned models](assets/tabarena-regression-lite/accuracy_time_scatter.png)
+
+![Per-dataset rank heatmap](assets/tabarena-regression-lite/per_dataset_rank_heatmap.png)
+
+![Optuna best-so-far curves](assets/tabarena-regression-lite/best_so_far_curve.png)
+
+The main takeaway is that `ParallelBooster` is the strongest current Boulevard
+predictive model in this benchmark, close to sklearn HGBR and random forests but
+behind CatBoost/XGBoost/LightGBM. `ExplainableBooster` is intentionally
+main-effect-only; its weaker score on general TabArena regression tasks should
+be read as an additive-model limitation rather than a failure of the interval
+API.
+
 ## Common Interval API
 
 All three estimators support:
@@ -234,7 +290,7 @@ Feature-level interval API:
 ```python
 term_lower, term_upper, term_pred = model.predict_feature_intervals(
     feature_idx=0,
-    values=X_test[:, 0],
+    x_k=X_test[:, 0],
     level=0.95,
     mode="confidence",
 )
